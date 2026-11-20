@@ -5,8 +5,41 @@
   "description": "DeepSeek Harness plugin: wrap work in tasks and fold finished tasks into model-written summaries, with lossless recall.",
   "license": "MIT",
   "type": "module",
+  "main": "./host/index.js",
+  "exports": {
+    ".": "./host/index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "host",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "engines": {
     "node": ">=22.8"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": "^0.2.2-rc.1",
+    "@deepseek-ai/dsh-compaction-basic": "^0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "^0.2.2-rc.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-compaction-basic": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    }
   },
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",

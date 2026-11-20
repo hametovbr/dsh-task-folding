@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Task folding",
+    "description": "Open and close units of work with task_begin and task_end; each closed task records its summary and fold verdict in the session log."
+  }
+}

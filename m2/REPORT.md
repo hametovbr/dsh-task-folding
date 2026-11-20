@@ -179,12 +179,15 @@ No change was needed to the architecture, the projection or the cut model.
 
 ## 9. Deliverables and checks
 
-- Code, packaging, tests and docs committed to `main` in five commits: texts/settings/resolver/estimator;
-  tools + view schema; entry point + bundle manifest; live fixtures + journal reader; docs (this report).
-- `npm test` — 92 tests pass (53 before M2). `npm run coverage` — 100% branch/line/function for
+- Code, packaging, tests and docs committed to `main` in small commits: texts/settings/resolver/estimator;
+  tools + view schema; entry point + bundle manifest; live fixtures + journal reader; plugin registration
+  tests; docs (this report).
+- `npm test` — 98 tests pass (53 before M2). `npm run coverage` — 100% branch/line/function for
   `host/projection.js` and `host/cuts.js`. `npm run typecheck` and `npm run lint` clean. CI runs the same.
 - Fixtures: `test/fixtures/logs/m2-{nested-relay,merged-resume,config-override}.jsonl`, scrubbed (home path
-  → `~`, no keys, tokens or e-mail addresses), replayed by `test/m2-journals.test.js`.
+  → `~`, no keys, tokens or e-mail addresses), replayed by `test/m2-journals.test.js`. `test/plugin.test.js`
+  covers the registration path with a fake Context, including the tool-name collision that keeps the
+  plugin inactive.
 - The scratch home `.m2-scratch/` was deleted after the runs; it is git-ignored in the meantime.
 
 Stopping here: M3 (self-summary folding) is not started.

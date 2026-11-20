@@ -5,3 +5,4 @@ coverage/
 .env
 test/fixtures/logs/*.raw.jsonl
 .tmp/
+.m2-scratch/

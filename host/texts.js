@@ -27,10 +27,11 @@ export const TASK_END_DESCRIPTION =
 
 export const TASK_END_PARAMS = Object.freeze({
   summary:
-    'Markdown. Sections, omitting empty ones: ## Done (what was done and why this way), ## Decisions ' +
-    '(user requests and corrections, verbatim when wording matters), ## Changed (exact file paths, ' +
-    'identifiers, values), ## Pitfalls (what failed and why), ## Outcome. Keep it to about a tenth of ' +
-    'the work it replaces.',
+    'Markdown about the work itself, not about opening or closing tasks. Use only sections that have ' +
+    'content, never "None": ## Done (what was done and why this way), ## Decisions (user requests and ' +
+    'corrections, verbatim when wording matters), ## Changed (exact file paths, identifiers, values), ' +
+    '## Pitfalls (what failed and why), ## Outcome. Size it to the work: a line or two for a small task, ' +
+    'about a tenth of the work for a large one.',
   id: 'Task id to close. Default: the innermost open task.',
   outcome: 'Default: done.',
 })

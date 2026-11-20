@@ -44,7 +44,7 @@ Errors (rendered by the host as `Error: task_begin failed: …`, no meta — the
     "properties": {
       "summary": {
         "type": "string",
-        "description": "Markdown. Sections, omitting empty ones: ## Done (what was done and why this way), ## Decisions (user requests and corrections, verbatim when wording matters), ## Changed (exact file paths, identifiers, values), ## Pitfalls (what failed and why), ## Outcome. Keep it to about a tenth of the work it replaces."
+        "description": "Markdown about the work itself, not about opening or closing tasks. Use only sections that have content, never \"None\": ## Done (what was done and why this way), ## Decisions (user requests and corrections, verbatim when wording matters), ## Changed (exact file paths, identifiers, values), ## Pitfalls (what failed and why), ## Outcome. Size it to the work: a line or two for a small task, about a tenth of the work for a large one."
       },
       "id": { "type": "string", "description": "Task id to close. Default: the innermost open task." },
       "outcome": { "type": "string", "enum": ["done", "failed", "abandoned"], "description": "Default: done." }
@@ -147,11 +147,11 @@ Task folding. Wrap each unit of work that has a verifiable outcome in task_begin
 |---|---|---|
 | Prompt section | 601 | ≤ 800 |
 | `task_begin` schema (compact JSON) | 442 | ≤ 500 |
-| `task_end` schema | 914 | ≤ 1,100 |
+| `task_end` schema | 1,040 | ≤ 1,100 |
 | `fold_recall` schema | 833 | ≤ 1,000 |
-| **Total** | **2,790 (≈ 700 tokens)** | **≤ 3,400 characters** |
+| **Total** | **2,916 (≈ 730 tokens)** | **≤ 3,400 characters** |
 
-For comparison, taskfold 0.40.1 spends ~8,100 characters (≈ 2,000 tokens) on the same surface. The prompt section plus the two lifecycle tools come to ~1,960 characters (≈ 490 tokens). `fold_recall` is a candidate for `deferLoading: true` once its first-use latency is measured ([07 Q6](07-open-questions.md#q6)). A unit test (`test/prompt-budget.test.js`) fails when the total exceeds the budget.
+For comparison, taskfold 0.40.1 spends ~8,100 characters (≈ 2,000 tokens) on the same surface. The prompt section plus the two lifecycle tools come to ~2,080 characters (≈ 520 tokens). The `summary` guidance grew in M2's follow-up: live summaries narrated task bookkeeping ("opened T3 and closed it"), wrote empty sections as "None", and ran 800–1,300 characters even for tasks that then stayed below the floor. `fold_recall` is a candidate for `deferLoading: true` once its first-use latency is measured ([07 Q6](07-open-questions.md#q6)). A unit test (`test/prompt-budget.test.js`) fails when the total exceeds the budget.
 
 ## 5. Hint text
 

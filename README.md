@@ -23,7 +23,7 @@ This project keeps the concept and replaces the foundation:
 | Who writes the summary | a separate LLM call per fold | the model itself, in `task_end`; an LLM call only as a fallback |
 | Fold latency | blocks the next agent step for the duration of an LLM call | milliseconds (model-free replacement) |
 | Recall | JSONL files on disk + the log | the log only |
-| Tools / prompt | 4 tools, ~2k tokens per request | 3 tools, ~700 tokens |
+| Tools / prompt | 4 tools, ~2k tokens per request | 3 tools, ~730 tokens |
 
 ## Documentation
 

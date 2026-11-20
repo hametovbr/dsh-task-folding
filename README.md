@@ -27,6 +27,7 @@ This project keeps the concept and replaces the foundation:
 
 ## Documentation
 
+- [HANDOFF.md](HANDOFF.md) — current state and the next milestone, for whoever continues the work
 - [docs/README.md](docs/README.md) — index and reading order
 - [docs/03-architecture.md](docs/03-architecture.md) — architecture
 - [docs/05-implementation-plan.md](docs/05-implementation-plan.md) — staged implementation plan

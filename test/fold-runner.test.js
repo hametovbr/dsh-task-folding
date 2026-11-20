@@ -68,6 +68,40 @@ function failingEngine(sim, error, kind) {
   return engine
 }
 
+/**
+ * Busy on the first attempt only, then the success engine: another transaction held the lock and
+ * released it before the retry.
+ *
+ * @param {Sim} sim
+ */
+function busyOnceEngine(sim) {
+  const success = successEngine(sim)
+  let busy = true
+  return {
+    calls: success.calls,
+    /**
+     * @param {any} agent
+     * @param {number} start
+     * @param {number} end
+     * @param {any[]} blocks
+     * @param {any} route
+     * @param {AbortSignal | undefined} signal
+     */
+    async foldRegion(agent, start, end, blocks, route, signal) {
+      if (busy) {
+        busy = false
+        success.calls.push({ busy: true })
+        throw new Error('busy')
+      }
+      return success.foldRegion(agent, start, end, blocks, route, signal)
+    },
+    balancedBefore: success.balancedBefore,
+    balancedAfter: success.balancedAfter,
+    /** @param {unknown} error @returns {'busy' | 'other'} */
+    classify: (error) => (error instanceof Error && error.message === 'busy' ? 'busy' : 'other'),
+  }
+}
+
 /** @param {Sim} sim */
 function agentOf(sim) {
   return { session: sessionOf(sim), options: { provider: 'opt-provider', model: 'opt-model' } }
@@ -159,26 +193,77 @@ test('the route comes from the latest request header, then from the agent option
   assert.deepEqual(engine.calls[0].route, { provider: 'header-provider', model: 'header-model' })
 })
 
-test('a busy lock stops the pass and the next boundary retries', async () => {
+test('a busy lock is retried once and folds in the same pass', async () => {
   const sim = new Sim()
   const h = harnessOf(sim, { meter: fakeMeter() })
   await h.batch([{ name: 'task_begin', args: { title: 'busy' } }])
   sim.work(4)
   await h.batch([{ name: 'task_end', args: { summary: SUMMARY } }])
 
-  const busy = failingEngine(sim, new Error('busy'), 'busy')
-  const { runner, logs } = runnerOf(sim, { engine: busy })
-  const first = await runner.pass(agentOf(sim), undefined, true)
-  assert.deepEqual(first, { folded: 0, busy: true, skipped: [] })
-  assert.equal(sim.state.tasks.T1?.status, 'queued')
-  assert.deepEqual(logs, [], 'busy is not an error worth a log line')
-
-  const ok = successEngine(sim)
-  busy.foldRegion = ok.foldRegion
-  busy.classify = ok.classify
-  const second = await runner.pass(agentOf(sim), undefined, true)
-  assert.equal(second.folded, 1)
+  const engine = busyOnceEngine(sim)
+  const { runner, logs } = runnerOf(sim, { engine })
+  const report = await runner.pass(agentOf(sim), undefined, true)
+  assert.deepEqual(report, { folded: 1, busy: false, skipped: [] })
+  assert.equal(engine.calls.length, 2, 'the busy attempt and the retry')
   assert.equal(sim.state.tasks.T1?.status, 'folded')
+  assert.deepEqual(logs, [], 'a lock that is released before the retry is silent')
+})
+
+test('a permanently busy lock stops the pass and leaves the task queued', async () => {
+  const sim = new Sim()
+  const h = harnessOf(sim, { meter: fakeMeter() })
+  await h.batch([{ name: 'task_begin', args: { title: 'busy' } }])
+  sim.work(4)
+  await h.batch([{ name: 'task_end', args: { summary: SUMMARY } }])
+
+  const engine = failingEngine(sim, new Error('busy'), 'busy')
+  const { runner, logs } = runnerOf(sim, { engine })
+  const report = await runner.pass(agentOf(sim), undefined, true)
+  assert.deepEqual(report, { folded: 0, busy: true, skipped: [] })
+  assert.equal(engine.calls.length, 2, 'one attempt and one retry, never a loop')
+  assert.equal(sim.state.tasks.T1?.status, 'queued')
+  assert.equal(logs.length, 1)
+  assert.match(logs[0] ?? '', /folding T1 waits: the compaction lock is held by another compaction/)
+})
+
+test('a busy lock is explained once per task for the process', async () => {
+  const sim = new Sim()
+  const h = harnessOf(sim, { meter: fakeMeter() })
+  await h.batch([{ name: 'task_begin', args: { title: 'busy forever' } }])
+  sim.work(4)
+  await h.batch([{ name: 'task_end', args: { summary: SUMMARY } }])
+
+  const engine = failingEngine(sim, new Error('busy'), 'busy')
+  const { runner, logs } = runnerOf(sim, { engine })
+  const agent = agentOf(sim)
+  await runner.pass(agent, undefined, true)
+  await runner.pass(agent, undefined, true)
+  assert.equal(engine.calls.length, 4, 'each pass tries twice')
+  const waitLines = logs.filter((line) => line.includes('waits: the compaction lock is held'))
+  assert.equal(waitLines.length, 1, 'one line for the whole process, not one per pass')
+  assert.match(waitLines[0] ?? '', /folding T1 waits/)
+})
+
+test('a busy lock another compaction wins neither stops the pass nor logs', async () => {
+  const sim = new Sim()
+  const h = harnessOf(sim, { meter: fakeMeter() })
+  await h.batch([{ name: 'task_begin', args: { title: 'lost the race' } }])
+  sim.work(4)
+  await h.batch([{ name: 'task_end', args: { summary: SUMMARY } }])
+
+  const engine = failingEngine(sim, new Error('busy'), 'busy')
+  engine.foldRegion = async () => {
+    engine.calls.push({ busy: true })
+    // The competing transaction commits the whole span before the retry gets its turn.
+    sim.fold('T1')
+    throw new Error('busy')
+  }
+  const { runner, logs } = runnerOf(sim, { engine })
+  const report = await runner.pass(agentOf(sim), undefined, true)
+  assert.deepEqual(report, { folded: 0, busy: false, skipped: [] })
+  assert.equal(engine.calls.length, 1, 'the retry sees the task is no longer queued')
+  assert.equal(sim.state.tasks.T1?.status, 'folded')
+  assert.deepEqual(logs, [], 'the other transaction absorbed the work; nothing waits')
 })
 
 test('a summary the host refuses as not smaller demotes the task for the process', async () => {
@@ -244,7 +329,15 @@ test('a fold node that is not smaller than its span never reaches the engine', a
   await h.batch([{ name: 'task_end', args: { summary: SUMMARY } }])
   assert.equal(sim.state.tasks.T1?.status, 'queued')
   // The host prices the span with its own meter; this estimator claims the node text is bigger.
-  const estimator = { node: () => 1000, text: () => 99_999 }
+  const estimator = {
+    regionTokens: (
+      /** @type {any} */ _session,
+      /** @type {readonly number[]} */ _nodes,
+      /** @type {number} */ from,
+      /** @type {number} */ to,
+    ) => (to - from + 1) * 1000,
+    text: () => 99_999,
+  }
   const { runner, engine, logs } = runnerOf(sim, { estimator })
   const report = await runner.pass(agentOf(sim), undefined, true)
   assert.deepEqual(report.skipped, ['T1'])

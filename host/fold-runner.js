@@ -35,6 +35,8 @@ export function createFoldRunner(deps) {
   const inFlight = new WeakSet()
   /** @type {WeakMap<object, Map<string, string>>} tasks skipped for the rest of the process */
   const skipped = new WeakMap()
+  /** @type {WeakMap<object, Set<string>>} tasks already logged as waiting for another compaction */
+  const waiting = new WeakMap()
   /** @type {WeakMap<object, Map<string, { failures: number, until: number }>>} */
   const backoff = new WeakMap()
   let boundary = 0
@@ -61,18 +63,32 @@ export function createFoldRunner(deps) {
       let state = await deps.stateOf(session)
       for (const due of dueTasks(state, { turnStopping })) {
         // Re-read the task: a fold committed for an inner task moved this one's cuts.
-        const task = state.tasks[due.id]
+        let task = state.tasks[due.id]
         // `delegate` tasks wait for M5: their summary has to be generated first.
         if (!task || task.status !== 'queued') continue
         if (skippedFor(session, task.id) !== undefined) continue
         if (backingOff(session, task.id)) continue
-        const outcome = await foldOne(agent, session, task, state, engine, signal)
-        if (outcome === 'folded') report.folded += 1
+        let outcome = await foldOne(agent, session, task, state, engine, signal)
         if (outcome === 'busy') {
-          report.busy = true
-          break
+          // Another transaction holds the durable compaction lock, and such a transaction usually
+          // commits in milliseconds. Re-read the projection and retry the same task once: the
+          // retry through the engine is the lock check, so the runner never looks at the log for
+          // the matching `compaction/end`.
+          await Promise.resolve()
+          state = await deps.stateOf(session)
+          task = state.tasks[due.id]
+          // The other transaction may have shadowed the span meanwhile; then there is nothing left.
+          if (!task || task.status !== 'queued') continue
+          outcome = await foldOne(agent, session, task, state, engine, signal)
+          if (outcome === 'busy') {
+            // The lock is genuinely held: stop the pass and let the next boundary retry the task.
+            report.busy = true
+            waitOnce(session, due.id)
+            break
+          }
         }
-        if (outcome === 'skipped') report.skipped.push(task.id)
+        if (outcome === 'folded') report.folded += 1
+        if (outcome === 'skipped') report.skipped.push(due.id)
         // A committed fold moves the outer tasks' cuts, so re-read the state before the next one.
         if (outcome === 'folded' || outcome === 'skipped') state = await deps.stateOf(session)
       }
@@ -177,11 +193,7 @@ export function createFoldRunner(deps) {
 
   /** @param {any} session @param {FoldRegion} region */
   function regionTokens(session, region) {
-    const nodes = session.surface.nodes
-    let total = 0
-    for (let i = region.startIndex; i <= region.endIndex; i++)
-      total += deps.estimator.node(session, /** @type {number} */ (nodes[i]))
-    return total
+    return deps.estimator.regionTokens(session, session.surface.nodes, region.startIndex, region.endIndex)
   }
 
   /**
@@ -225,6 +237,24 @@ export function createFoldRunner(deps) {
   function skippedFor(session, taskId) {
     const map = skipped.get(session)
     return map === undefined ? undefined : map.get(taskId)
+  }
+
+  /**
+   * A busy lock is not an error, but a task that waits silently for the whole process is
+   * unobservable, so the first give-up is explained once per task. In memory only: a restart is a
+   * new chance to explain it, and a permanently held lock logs exactly one line.
+   *
+   * @param {any} session
+   * @param {string} taskId
+   */
+  function waitOnce(session, taskId) {
+    const ids = waiting.get(session) ?? new Set()
+    if (ids.has(taskId)) return
+    ids.add(taskId)
+    waiting.set(session, ids)
+    deps.logger.warn(
+      `task-folding: folding ${taskId} waits: the compaction lock is held by another compaction`,
+    )
   }
 
   /** @param {any} session @param {string} taskId */

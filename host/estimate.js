@@ -44,9 +44,7 @@ export class SpanEstimator {
       if (begin !== -1) from = begin + 1
     }
     if (from === -1) return -1
-    let total = 0
-    for (let i = from; i < nodes.length; i++) total += this.node(session, /** @type {number} */ (nodes[i]))
-    return total
+    return this.regionTokens(session, nodes, from, nodes.length - 1)
   }
 
   /**
@@ -58,24 +56,70 @@ export class SpanEstimator {
     let cache = this.cache.get(session)
     const hit = cache === undefined ? undefined : cache.get(seq)
     if (hit !== undefined) return hit
-    const event = session.eventAt(seq)
-    const message = event ? session.deriveEventMessage(event) : null
-    const tokens = message ? safe(this.meter.estimateMessage(message)) : 0
     if (cache === undefined) {
       cache = new Map()
       this.cache.set(session, cache)
-    } else if (cache.size >= this.limit) {
-      const oldest = cache.keys().next().value
-      if (oldest !== undefined) cache.delete(oldest)
     }
-    cache.set(seq, tokens)
-    return tokens
+    return measureInto(this, session, cache, seq)
+  }
+
+  /**
+   * Tokens of an inclusive slice of the current surface. A folding boundary is measured cold in a
+   * fresh process (docs/06 §4), so the per-session cache is resolved once here instead of through
+   * `node()` for every seq: one `WeakMap.get` per region, then plain `Map` access in the loop.
+   *
+   * @param {SessionLike} session
+   * @param {readonly number[]} nodes current surface node seqs, in surface order
+   * @param {number} startIndex
+   * @param {number} endIndex
+   */
+  regionTokens(session, nodes, startIndex, endIndex) {
+    if (startIndex > endIndex) return 0
+    let cache = this.cache.get(session)
+    if (cache === undefined) {
+      cache = new Map()
+      this.cache.set(session, cache)
+    }
+    let total = 0
+    for (let i = startIndex; i <= endIndex; i++) {
+      const seq = nodes[i]
+      // The planner only returns in-range indices; skipping keeps the index type narrow.
+      if (seq === undefined) continue
+      const hit = cache.get(seq)
+      if (hit !== undefined) {
+        total += hit
+      } else {
+        total += measureInto(this, session, cache, seq)
+      }
+    }
+    return total
   }
 
   /** @param {string} text */
   text(text) {
     return safe(this.meter.estimateMessage({ role: 'user', content: [{ type: 'text', text }] }))
   }
+}
+
+/**
+ * Estimate one seq and store it in an already-resolved per-session cache, evicting the oldest
+ * entry at the limit so a long-running host stays bounded.
+ *
+ * @param {SpanEstimator} estimator
+ * @param {SessionLike} session
+ * @param {Map<number, number>} cache
+ * @param {number} seq
+ */
+function measureInto(estimator, session, cache, seq) {
+  const event = session.eventAt(seq)
+  const message = event ? session.deriveEventMessage(event) : null
+  const tokens = message ? safe(estimator.meter.estimateMessage(message)) : 0
+  if (cache.size >= estimator.limit) {
+    const oldest = cache.keys().next().value
+    if (oldest !== undefined) cache.delete(oldest)
+  }
+  cache.set(seq, tokens)
+  return tokens
 }
 
 /** @param {unknown} n */

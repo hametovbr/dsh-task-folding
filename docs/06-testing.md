@@ -7,8 +7,8 @@
 | Unit | Pure functions: reducer rows, cut translation, planner, texts, settings readers, recall formatting | `test/*.test.js` | every commit |
 | Property | Invariants over random event sequences | `test/properties.test.js` | every commit (1,000 cases) |
 | Replay | Projection from scratch vs from checkpoints | `test/replay.test.js` | every commit |
-| Component | Tools and fold runner against a fake session and fake engine | `test/tools.test.js`, `test/fold-runner.test.js` | every commit |
-| Contract | Adapter assumptions against published host packages | `scripts/contract-check.js` | CI, nightly, and before each release |
+| Component | Tools (including recall) and the fold runner against a fake session and fake engine | `test/tools.test.js`, `test/recall.test.js`, `test/fold-runner.test.js`, `test/engine-adapter.test.js`, `test/plugin.test.js` | every commit |
+| Contract | Adapter assumptions against published host packages | `scripts/contract-check.js` | Weekly and on demand (`.github/workflows/contract.yml`), and before each release; it needs network, so it never gates a push |
 | Live | Real DSH host, scripted sessions driven headlessly (`dsh --profile <p> --json [--session-id <id>] "<task>"`, profile = `dsh-base` + `dsh-headless` + this plugin; see [02 §11](02-host-api.md#11-operations-live)) | `test/live/` (needs API key) | before each release |
 | Evaluation | Task suite, three configurations | `eval/` | M7 and on demand |
 
@@ -35,7 +35,7 @@ The DSL also maintains a simulated surface (`nodes`) by applying `replace` ops b
 
 ### 2.2 Recorded logs
 
-Real session logs (JSONL) captured from a live host, scrubbed of secrets. The M0 journals in `m0/sessions/` are the first set (decoded from `session.v4.jsonl.zstd`; first line is the session header without `seq`): batches of several calls (S2), a resume (S1), three automatic checkpoints (S3b), a `/compact` (S0-S3c-S5), tool-result prunes (S3), PTC dispatches (S4, S4b) and a fork (S6). Later captures go under `test/fixtures/logs/`. They pin the real event shapes (`tool/result` format v4, `meta` placement, replacement envelopes). Every reducer change must still replay them without throwing and with unchanged terminal verdicts (snapshot test).
+Real session logs (JSONL) captured from a live host, scrubbed of secrets. The M0 journals in `m0/sessions/` are the first set (decoded from `session.v4.jsonl.zstd`; first line is the session header without `seq`): batches of several calls (S2), a resume (S1), three automatic checkpoints (S3b), a `/compact` (S0-S3c-S5), tool-result prunes (S3), PTC dispatches (S4, S4b) and a fork (S6). Later captures go under `test/fixtures/logs/` (`m2-*.jsonl` for tools without folding, `m3-*.jsonl` for self-summary folds, a realm checkpoint and a nested relay), replayed by `test/m2-journals.test.js` and `test/m3-journals.test.js`. They pin the real event shapes (`tool/result` format v4, `meta` placement, replacement envelopes). Every reducer change must still replay them without throwing and with unchanged terminal verdicts (snapshot test).
 
 ## 3. Invariants as properties
 
@@ -51,7 +51,7 @@ Checks after every event:
 
 ## 4. Performance tests
 
-- `test/perf.test.js`: build a synthetic log of 80k events with 200 tasks; assert that a pre-step handler call with nothing due takes < 2 ms and with one due self fold (fake engine) < 10 ms, independent of log length (compare 5k vs 80k: ratio < 2).
+- `test/perf.manual.js` (`npm run perf`, its own CI step, because `npm test` runs a dozen files in parallel and wall-clock budgets would measure the scheduler): build a synthetic log of 80k events with 200 tasks; assert that a pre-step call with nothing due takes < 2 ms and that a cold folding boundary (one due self fold, fake engine) takes < 10 ms. The "does not grow with the log" invariant is pinned by the same absolute budget at 5k and at 80k events on the idle boundary rather than by a ratio of two sub-millisecond medians (that ratio is mostly scheduler noise). A boundary that folds pays three `surface.nodes.indexOf` calls, i.e. O(surface), which the design accepts (`docs/03` §5.2); what must not grow with the log is everything else, and `test/fold-runner.test.js` proves structurally that no code path snapshots or iterates the log.
 - A guard test that wraps `session.snapshotEvents` in the fake session to throw, and runs the pre-step and turn-stopping handlers.
 
 ## 5. Evaluation protocol

@@ -523,6 +523,51 @@ function isStringArray(value) {
 
 export const stateSchema = Object.freeze({ parse: parseState })
 
+/**
+ * Validates the wire view the host publishes to clients. Like parseState it throws on
+ * anything this version did not produce, so a broken view fails loudly instead of reaching
+ * the Client half-read.
+ *
+ * @param {unknown} value
+ * @returns {View}
+ */
+export function parseView(value) {
+  const fail = (/** @type {string} */ what) => {
+    throw new TypeError(`taskFolding view: invalid ${what}`)
+  }
+  if (!isRecord(value)) return fail('root')
+  if (!isViewArray(value.open, isViewOpen)) fail('open')
+  if (!isViewArray(value.folding, isViewFolding)) fail('folding')
+  if (!isViewArray(value.recent, isViewRecent)) fail('recent')
+  return /** @type {View} */ (/** @type {unknown} */ (value))
+}
+
+/**
+ * @param {unknown} value
+ * @param {(entry: Record<string, unknown>) => boolean} check
+ * @returns {boolean}
+ */
+function isViewArray(value, check) {
+  return Array.isArray(value) && value.every((entry) => isRecord(entry) && check(entry))
+}
+
+/** @param {Record<string, unknown>} entry */
+function isViewOpen(entry) {
+  return typeof entry.id === 'string' && typeof entry.title === 'string' && typeof entry.depth === 'number'
+}
+
+/** @param {Record<string, unknown>} entry */
+function isViewFolding(entry) {
+  return typeof entry.id === 'string' && typeof entry.title === 'string'
+}
+
+/** @param {Record<string, unknown>} entry */
+function isViewRecent(entry) {
+  return isViewFolding(entry) && typeof entry.status === 'string'
+}
+
+export const viewSchema = Object.freeze({ parse: parseView })
+
 /** @type {WeakMap<Record<string, Task>, { open: string[], view: View }>} */
 const viewCache = new WeakMap()
 

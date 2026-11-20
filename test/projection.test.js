@@ -11,10 +11,12 @@ import {
   isEndMeta,
   MAX_DELEGATE_FAILURES,
   parseState,
+  parseView,
   PROJECTION_KEY,
   RECENT_LIMIT,
   STATE_VERSION,
   stateSchema,
+  viewSchema,
   toolCalls,
   view,
 } from '../host/projection.js'
@@ -615,4 +617,36 @@ test('unknown events return the same state', () => {
   const state = initialState()
   assert.equal(apply(state, { type: 'turn/start', seq: 0 }), state)
   assert.equal(apply(state, { type: 'tool/call', seq: 1, data: {} }), state)
+})
+
+test('parseView accepts the wire view and rejects malformed shapes', () => {
+  const sim = new Sim()
+  sim.begin('outer')
+  sim.work()
+  sim.begin('inner')
+  sim.end()
+  sim.begin('third')
+  const live = view(sim.state)
+  assert.deepEqual(parseView(live), live)
+  assert.equal(viewSchema.parse, parseView)
+  assert.deepEqual(parseView({ open: [], folding: [], recent: [] }), {
+    open: [],
+    folding: [],
+    recent: [],
+  })
+
+  const ok = {
+    open: [{ id: 'T1', title: 'a', depth: 0 }],
+    folding: [{ id: 'T2', title: 'b' }],
+    recent: [{ id: 'T3', title: 'c', status: 'folded' }],
+  }
+  assert.doesNotThrow(() => parseView(ok))
+  assert.throws(() => parseView(null), /root/)
+  assert.throws(() => parseView({ open: {}, folding: [], recent: [] }), /open/)
+  assert.throws(() => parseView({ open: [{ id: 1, title: 'a', depth: 0 }], folding: [], recent: [] }), /open/)
+  assert.throws(() => parseView({ open: ['T1'], folding: [], recent: [] }), /open/)
+  assert.throws(() => parseView({ open: [], folding: [{ id: 'T2' }], recent: [] }), /folding/)
+  assert.throws(() => parseView({ open: [], folding: { id: 'T2' }, recent: [] }), /folding/)
+  assert.throws(() => parseView({ open: [], folding: [], recent: [{ id: 'T3', title: 'c' }] }), /recent/)
+  assert.throws(() => parseView({ open: [], folding: [] }), /recent/)
 })

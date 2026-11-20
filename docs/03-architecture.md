@@ -290,7 +290,7 @@ Exact schemas and texts: [04-tools-and-prompt.md](04-tools-and-prompt.md).
 - Refuse under PTC.
 - Target: `id` if given and open, else the innermost open task. Unknown id → error listing open ids. No open task → error.
 - Open descendants of the target are closed with it as `merged` (no LIFO refusal).
-- If the target's `beginCut === -1` (another compaction swallowed its start), the verdict is `absorbed` with `estTokens: -1`, and the result tells the model the task closed without a fold of its own.
+- If any tracked boundary of the target was absorbed (2.4) — another compaction swallowed where the task began — the verdict is `absorbed` with `estTokens: -1`, and the result tells the model the task closed without a fold of its own.
 - Estimate the span: `estimate.js` sums `ctx.tokenMeter.estimateMessage(session.deriveEventMessage(session.eventAt(n)))` over surface nodes after `beginCut` up to the current tail. If the target is still `opening` (begun in this same batch), the span is empty → `below-floor`.
 - Verdict:
   - `estTokens < minSpanTokens` → `below-floor`;

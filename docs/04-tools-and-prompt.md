@@ -60,6 +60,8 @@ Output value:
 { "ok": true, "id": "T7", "verdict": "queued", "merged": [], "remaining": ["T6"] }
 ```
 
+The value also carries `estTokens`, `summaryChars`, `outcome` and `callId`: `presentationMeta` copies them into the meta (it receives only the arguments and the value, and `callId` is known only inside `execute`), while `render` shows none of them.
+
 Rendered text by verdict:
 
 | Verdict | Text |

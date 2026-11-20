@@ -1,0 +1,106 @@
+{
+  "host": {
+    "dsh": "0.2.2-rc.5",
+    "dshAppBoot": "0.2.2-rc.5",
+    "compactionBasic": "0.2.2-rc.5",
+    "node": "v24.19.0",
+    "os": "Debian GNU/Linux 13 (trixie) x86_64, kernel 6.17.13-2-pve"
+  },
+  "drive": {
+    "mechanism": "The profile's headless app, one process per task: `dsh --profile <p> --json [--session-id <id>] \"<task>\"`; the first NDJSON line carries the sessionId, which the next invocation passes to --session-id. `--json`/final events give the run outcome. The interactive web app (isolated instance on 127.0.0.1:3099) was driven through the ego browser for the dock-slot rendering, /compact, the idle-maintenance timing and the fork. Session journals live at $DSH_HOME/sessions/<escaped-cwd>/session-<uuid>/session.v4.jsonl.zstd: zstd-framed JSONL, one {\"type\",\"seq\",\"time\",\"data\"} event per line, decoded with node:zlib.zstdDecompressSync frame by frame.",
+    "limitations": "Work ran in a dedicated scratch DSH_HOME inside the workspace (.m0-scratch/dsh-home, deleted afterwards) because ~/.dsh is read-only to this session's workspace-write file policy; no existing profile was modified, but the profile path is $SCRATCH/profiles/m0-spike rather than ~/.dsh/profiles/m0-spike. Two scratch profiles were required (m0-spike = web template, m0-spike-headless = headless template) because the web app claims the whole command line and cannot share a profile with the headless app. Browser console output could not be captured (no console channel in the ego runtime), and cordis_inspect is absent, so the slot list comes from the runtime rendering plus the bundled client contract. Three early headless runs included a literal 'headless' word in the task text. pnpm needed npm_config_store_dir/XDG_* inside the workspace to run under the sandbox."
+  },
+  "questions": {
+    "Q1": {
+      "verdict": "confirmed",
+      "summary": "run_code is absent from shipped compositions (tool-executor-ptc is disabled), and enabling it requires disabling tool-executor-native (one executor per scope). With PTC enabled, a tool called from a program produces no tool/result of its own: only tool/ptc-dispatch-start + tool/ptc-dispatch, and its presentationMeta lands on tool/ptc-dispatch.data.meta. exec.rootCallId is set for direct calls too (equal to the tool's own call id), while the nested call is identified by exec.callId = '<rootCallId>:ptc:<n>'.",
+      "evidence": [
+        "m0/sessions/S4.jsonl seq 20 tool/call run_code; seq 21 tool/ptc-dispatch-start {subCallId: '...:ptc:1', name: 'probe_meta'}; seq 22 tool/ptc-dispatch data.meta {probe:1,label:P,at:1795188205592}; seq 23 tool/result sourceEventSeqs [20] for run_code only",
+        "m0/sessions/S4b.jsonl + probe log exec2: keys [token,callId,rootCallId,name,signal,agent,toolSet,parent,schema,deferContext,concludeTurn,arguments], callId 'call_00_Kk1X...:ptc:1', rootCallId 'call_00_Kk1X...'",
+        "probe log exec for the direct call: label A, rootCallId 'call_00_ET_Cancd...' == that call's toolCallId (m0/sessions/S1.jsonl seq 21)",
+        "boot failure with PTC alone: 'Only one tool executor may be registered in each scope' (m0/commands.md)"
+      ]
+    },
+    "Q2": {
+      "verdict": "confirmed",
+      "summary": "output.presentationMeta is stored verbatim as tool/result.data.meta, survives a process stop and a --session-id resume, and is replayed to a fresh projection, including in a fork. A plain resume reports inheritedEventCount 0 and replays the whole log; a fork reports 28.",
+      "evidence": [
+        "m0/sessions/S1.jsonl seq 21 data.meta {probe:1,label:A,at:1795187184181} with surfaceOp append, sourceEventSeqs [20]",
+        "probe log pid 4: proj-init inheritedEventCount 0 then proj-apply seq 21 tool/result with meta label A",
+        "probe log fork run: proj-init inheritedEventCount 28 then proj-apply seq 21 meta label A"
+      ]
+    },
+    "Q3": {
+      "verdict": "confirmed",
+      "summary": "agent.whenIdle().then(() => agent.runMaintenance(job)) from agent/turn-stopping runs the job after the turn ends; a message submitted 450 ms after the turn end is admitted only after maint-resolved (189 ms later) and does not abort the job. In a one-shot headless process the job is aborted by process teardown (aborted=true after 104 ms). runMaintenance throwing when a turn already started was not observed.",
+      "evidence": [
+        "probe log (web pid): turn-stopping turn=4 @7147, idle @7162, maint-start @7162, maint-end aborted=false @12165, maint-resolved @12190, pre-step turn=5 @12379",
+        "ego script: turn-1 end at 1795187802716, second message submitted at 1795187803174 (deltaAfterEnd 450 ms)",
+        "probe log (headless pid 5): maint-start then maint-end aborted=true 104 ms later at turn end"
+      ]
+    },
+    "Q4": {
+      "verdict": "partial",
+      "summary": "Layout-dependent. With the bundle installed as a pnpm link: to a directory outside the profile (what dsh plugin add <local path> produces), bare imports of @deepseek-ai/dsh-compaction-basic, dsh-compaction, dsh-llm and schemastery all fail with 'Cannot find package ... imported from .../probe-bundle/index.js'. With the package physically inside profiles/<name>/node_modules and a profiles/node_modules/@deepseek-ai level (as in the real home), the same four bare imports succeed and expose BasicCompactionEngine, CompactionEngine, compactCheckpointSource, toolPairingBalancedAfter, etc. Whether peerDependencies make dsh plugin add link them was not tested.",
+      "evidence": [
+        "probe log resolve lines, linked install: four {\"ok\":false,\"error\":\"Cannot find package '@deepseek-ai/dsh-compaction-basic' imported from .../m0/probe-bundle/index.js\"}",
+        "probe log resolve lines, copied layout: four {\"ok\":true} with export keys listed"
+      ]
+    },
+    "Q7": {
+      "verdict": "confirmed",
+      "summary": "One Loader row named after the package carries both halves: the same tf-probe row ran the Host apply and delivered the client module. Both conversation.input.dock and conversation.composer.dock exist as list slots and both injections landed; only input.dock renders on the home screen, both render once a conversation is open.",
+      "evidence": [
+        "m0/logs/s0-dock-tag.png shows 'TF-PROBE conversation.input.dock' above the composer",
+        "ego DOM read after opening a session: ['TF-PROBE conversation.input.dock','TF-PROBE conversation.composer.dock']",
+        "slot contract: dsh-cordis-client-runner/lib/client.js:852,1013 -> packages/client/ui-conversation/src/client/contract/slots.ts:336,341"
+      ]
+    },
+    "Q8": {
+      "verdict": "confirmed",
+      "summary": "Every replacement reaches projection apply() with top-level surfaceOp {op:'replace',startSeq,endSeq} and a complete sourceEventSeqs, for compaction checkpoints (replacement type user/message) and for tool-result pruning (replacement type tool/result). For checkpoints sourceEventSeqs is a superset of the summary's shadowedSeqs: it adds the checkpoint's own compaction/start and compaction/summary. For prunes the two sets are identical. surfaceOp start/end equals shadowedRange start/end. /compact in the interactive surface produces the same shape.",
+      "evidence": [
+        "m0/sessions/S3b.jsonl seq 83 compaction/start; seq 85 compaction/summary shadowedSeqs n=24 first [8,9,10] last [73,75]; seq 86 user/message surfaceOp {op:replace,startSeq:8,endSeq:75} sourceEventSeqs n=26 first [83,85,8]; seq 87 compaction/end",
+        "m0/sessions/S3.jsonl seq 83 compaction/prune {shadowedSeqs:[21],shadowedRange:{start:21,end:21}}; seq 84 tool/result surfaceOp {op:replace,startSeq:21,endSeq:21} sourceEventSeqs [21], original meta preserved",
+        "probe log proj-apply seq=86 user/message op={op:replace,startSeq:8,endSeq:75} srcN=26 and proj-apply seq=85 compaction/summary shadowedN=24",
+        "web /compact: compaction/start cid=e5e5aa3a-ba0e-4347-8a48-7fd99e4b7ecf -> compaction/summary -> user/message op={op:replace,startSeq:8,endSeq:65} srcN=19 -> compaction/end"
+      ]
+    },
+    "Q9": {
+      "verdict": "refuted",
+      "summary": "Calls of one assistant message execute strictly sequentially under the native executor: two 3000 ms sleeps in one batch did not overlap, and tool/call and tool/result strictly alternate seq by seq. The batch took about 6.05 s.",
+      "evidence": [
+        "probe log S2: sleep-start X @3739, sleep-end X @6739, sleep-start Y @6767, sleep-end Y @9768, exec Z @9776 (ms within the run)",
+        "m0/sessions/S2.jsonl seq 20/21, 22/23, 24/25 alternate tool/call and tool/result; one assistant/message carries all three tool-call blocks (probe log seq 19 calls=probe_sleep,probe_sleep,probe_meta)"
+      ]
+    },
+    "fork": {
+      "verdict": "confirmed",
+      "summary": "The interactive surface forks a session at a turn boundary; the fork's projection initialises with inheritedEventCount equal to the inherited event count (28) and inherited events, including the first turn's tool/result meta, are re-applied. The fork continues its own seq numbering (first tool/result at seq 44).",
+      "evidence": [
+        "probe log: proj-init inheritedEventCount 28 -> proj-apply seq 21 meta {probe:1,label:A} -> exec label F -> proj-apply seq 44 meta {probe:1,label:F}",
+        "m0/sessions/S6.jsonl (fork journal), UI title 'Headless Call probe_meta test (1)'"
+      ]
+    }
+  },
+  "facts": {
+    "metaPersistedOnToolResult": true,
+    "metaReplayedToProjection": true,
+    "replaceEventHasSurfaceOp": true,
+    "sourceEventSeqsEqualsShadowedSeqs": false,
+    "ptcInnerCallHasOwnToolResult": false,
+    "batchCallsRunConcurrently": false,
+    "turnStoppingMaintenanceRunsAfterTurn": true,
+    "maintenanceBlocksNextTurnUntilDone": true,
+    "runMaintenanceThrowsWhenBusy": null,
+    "bareImportResolves": {
+      "@deepseek-ai/dsh-compaction-basic": false,
+      "@deepseek-ai/dsh-compaction": false,
+      "@deepseek-ai/dsh-llm": false,
+      "@deepseek-ai/schemastery": false
+    },
+    "dockSlotName": "conversation.input.dock (also present: conversation.composer.dock)",
+    "singleRowHostAndClientWorks": true,
+    "forkInheritedEventCountObserved": 28
+  }
+}

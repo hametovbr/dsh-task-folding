@@ -157,6 +157,26 @@ test('every task-mark meta in the live journals is a shape the reducer accepts',
   }
 })
 
+test('the replayed verdict of every task equals the verdict in its task_end meta', () => {
+  for (const name of readLogNames()) {
+    const events = readLog(name)
+    const state = replay(events)
+    let checked = 0
+    for (const event of events) {
+      const meta = event.type === 'tool/result' ? event.data?.meta : undefined
+      if (!isRecord(meta) || meta.tf !== 1 || meta.op !== 'end') continue
+      const task = state.tasks[/** @type {string} */ (meta.id)]
+      assert.ok(task, `${name}: ${meta.id} exists`)
+      assert.equal(task.verdict, meta.verdict, `${name}: ${meta.id} verdict follows the meta`)
+      assert.equal(task.outcome, meta.outcome, `${name}: ${meta.id} outcome follows the meta`)
+      assert.equal(task.summaryChars, meta.summaryChars, `${name}: ${meta.id} summary length`)
+      assert.equal(task.estTokens, meta.estTokens, `${name}: ${meta.id} estimate`)
+      checked += 1
+    }
+    assert.ok(checked > 0, `${name}: at least one task_end meta`)
+  }
+})
+
 test('the relay in one message produced adjacent cuts', () => {
   const events = readLog('m2-nested-relay.jsonl')
   const state = replay(events)

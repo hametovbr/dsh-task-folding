@@ -78,6 +78,8 @@ open=[] nextId=4 assistantCount=12
   `assistant/message` (`test/m2-journals.test.js` checks both facts against the journal).
 - Every task landed `below-floor` because the work was three one-line file reads: the largest span was
   1,999 tokens — one token under the default 2,000 floor.
+- Every replayed verdict, outcome, estimate and summary length equals the one the tool wrote into the
+  meta; `test/m2-journals.test.js` asserts that for all three fixtures.
 
 ### 4.2 Session 3 — merge and resume
 
@@ -182,7 +184,7 @@ No change was needed to the architecture, the projection or the cut model.
 - Code, packaging, tests and docs committed to `main` in small commits: texts/settings/resolver/estimator;
   tools + view schema; entry point + bundle manifest; live fixtures + journal reader; plugin registration
   tests; docs (this report).
-- `npm test` — 98 tests pass (53 before M2). `npm run coverage` — 100% branch/line/function for
+- `npm test` — 99 tests pass (53 before M2). `npm run coverage` — 100% branch/line/function for
   `host/projection.js` and `host/cuts.js`. `npm run typecheck` and `npm run lint` clean. CI runs the same.
 - Fixtures: `test/fixtures/logs/m2-{nested-relay,merged-resume,config-override}.jsonl`, scrubbed (home path
   → `~`, no keys, tokens or e-mail addresses), replayed by `test/m2-journals.test.js`. `test/plugin.test.js`

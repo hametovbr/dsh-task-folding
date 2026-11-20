@@ -28,7 +28,7 @@ Output value (validated by `output.schema`):
 
 Rendered text: `Task T7 opened (inside T6).` / `Task T7 opened.`
 
-Errors (rendered as `task_begin failed: …`, no meta):
+Errors (rendered by the host as `Error: task_begin failed: …`, no meta — the plugin's error strings are model-facing, so they live in `host/texts.js`):
 
 - `title` empty after normalization (whitespace collapsed, newlines removed, trimmed, capped at 120 characters);
 - called from `run_code`.
@@ -126,6 +126,8 @@ L2: …const redirect_uri = buildRedirect(…
 ```
 
 Output caps: index 200 lines per page; range 20 messages and ~40k characters total, with `[truncated: narrow from/to]` when cut; grep 50 hits, 200 characters of context each.
+
+The build order is [05](05-implementation-plan.md): the no-argument fold list ships in M2, the index, range and grep shapes in M4.
 
 ## 2. `meta` payloads
 

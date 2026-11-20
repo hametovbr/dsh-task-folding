@@ -84,7 +84,7 @@ test('a call without an exec context is refused', async () => {
   const { h } = harness()
   await assert.rejects(
     h.byName.task_begin.execute({ title: 'x' }, {}),
-    /task_begin failed: task folding is not ready yet/,
+    /task_begin failed: the call arrived without a host execution context/,
   )
 })
 

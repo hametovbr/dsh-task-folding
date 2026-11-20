@@ -114,3 +114,4 @@ export const ERR_UNKNOWN_TASK = (id, open) =>
   `task ${id} is not open. Open tasks: ${open.length === 0 ? 'none' : open.join(', ')}.`
 export const ERR_BAD_OUTCOME = 'outcome must be done, failed or abandoned.'
 export const ERR_UNAVAILABLE = 'task folding is not ready yet; try again.'
+export const ERR_NO_EXEC = 'the call arrived without a host execution context.'

@@ -285,7 +285,7 @@ export function normalizeTitle(raw) {
  */
 function assertDirect(exec, tool) {
   if (!exec || typeof exec.callId !== 'string' || typeof exec.rootCallId !== 'string')
-    throw new Error(texts.failure(tool, texts.ERR_UNAVAILABLE))
+    throw new Error(texts.failure(tool, texts.ERR_NO_EXEC))
   if (exec.callId !== exec.rootCallId) throw new Error(texts.failure(tool, texts.ERR_NESTED(tool)))
 }
 

@@ -1,0 +1,27 @@
+name: contract
+
+# The contract check downloads the published host packages from npm, so it needs network and a
+# minute of CI time and must not gate ordinary pushes. It runs weekly and on demand to catch a host
+# refactor that breaks the engine adapter (docs/adr/0004-engine-adapter.md, docs/08-followups.md F4).
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  contract:
+    name: Contract check against published host packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+      - name: Set up Node 22 with the npm cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Check the engine adapter against the published host packages
+        run: npm run contract

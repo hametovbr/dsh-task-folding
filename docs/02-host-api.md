@@ -115,7 +115,7 @@ Agent methods:
 
 ## 6. Compaction (public service + internal implementation)
 
-Source: `packages/compaction/compaction/src/index.ts`, `types.ts`, `tool-pairing.ts`; `packages/compaction/compaction-basic/src/index.ts`, `region.ts`, `summarizer.ts`.
+Source: `packages/compaction/compaction/src/index.ts`, `types.ts`, `tool-pairing.ts`; `packages/compaction/compaction-basic/src/index.ts`, `region.ts`, `summarizer.ts`, `config.ts`.
 
 Public contract (`ctx.compaction: CompactionEngine`):
 
@@ -161,6 +161,19 @@ which would silently disable automatic compaction.
 (`assertCompactionInactive`); the shrink refusal is a plain `Error` whose message starts with
 `summary is not smaller than the shadowed content` (`region.ts` ~L415–L422). The adapter
 classifies on that text, and `scripts/contract-check.js` pins it in CI.
+
+### A realm engine that fails to mount (configuration trap)
+
+`resolveConfig` (`packages/compaction/compaction-basic/src/config.ts` L68, via
+`validateRatioRetention` ~L230) rejects a retention that reaches the pressure threshold: the
+verbatim tail — `retainRatio` (default `0.16`) or `retainTokens`, whichever is configured — must
+stay below the resolved `thresholdRatio` (default `0.8`). A profile row with e.g.
+`thresholdRatio: 0.01` fails to mount with `BasicCompactionConfig: retainRatio (0.16) must be less
+than the resolved thresholdRatio (0.01)`; the startup log adds only `dsh: warning: N entries did
+not activate`, and `ctx.compaction` is absent — no service and no error at the call site. A
+plugin-owned engine still folds through its own instance when the realm engine is missing (above),
+so "compaction stopped working" is easy to miss: check `ctx.compaction` and the startup warnings
+first.
 
 ## 7. LLM and token meter (public)
 

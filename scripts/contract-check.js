@@ -14,6 +14,8 @@ import path from 'node:path'
 const require = createRequire(import.meta.url)
 const ROOT = path.resolve(import.meta.dirname, '..')
 const manifest = require(path.join(ROOT, 'package.json'))
+// A fresh checkout has no `.tmp`: create the scratch parent before asking for a child in it.
+fs.mkdirSync(path.join(ROOT, '.tmp'), { recursive: true })
 const work = fs.mkdtempSync(path.join(ROOT, '.tmp', 'contract-'))
 const keep = process.argv.includes('--keep')
 

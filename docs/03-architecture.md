@@ -295,6 +295,7 @@ Exact schemas and texts: [04-tools-and-prompt.md](04-tools-and-prompt.md).
 - Verdict:
   - `estTokens < minSpanTokens` → `below-floor`;
   - `summary` shorter than `minSummaryChars` (default 200) or estimated summary tokens > `maxSummaryRatio` × `estTokens` (default 0.5) → `delegate` if `delegateEnabled`, else `queued` (and the host's "not smaller" check is the last guard);
+  - a usable summary whose fold would save less than the floor — `estTokens − summaryTokens < minSpanTokens` — → `below-floor`. The span includes the `task_end` message, and its arguments carry the summary, so a verbose summary would otherwise inflate the estimate and push a small task over the floor (observed in M2: a three-read task measured 1,999 tokens, much of it its own and its subtasks' summaries). With `maxSummaryRatio` ≤ 0.5 this rule only bites for spans between the floor and about twice the floor;
   - else `queued`.
 - Returns `{ ok: true, id, verdict, merged, remaining }`; meta `EndMeta`.
 

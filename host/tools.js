@@ -244,8 +244,12 @@ export function createTools(deps) {
 }
 
 /**
- * The verdict of a closed task (docs/03 §6.2), in this order: absorbed, still opening,
- * below the fold floor, unusable summary, otherwise queued.
+ * The verdict of a closed task (docs/03 §6.2), in this order: absorbed; still opening; span
+ * below the fold floor; unusable summary (delegate, or queued when delegation is off); a
+ * usable summary whose fold would save less than the floor; otherwise queued.
+ *
+ * The span includes the task_end message, whose arguments carry the summary itself, so the
+ * saving of a self-summary fold is `estTokens - summaryTokens`, not `estTokens`.
  *
  * @param {Task} task
  * @param {string} summary
@@ -261,8 +265,8 @@ export function decideVerdict(task, summary, summaryTokens, estTokens, settings)
   const unusable =
     summary.length < settings.minSummaryChars ||
     (estTokens > 0 && summaryTokens > settings.maxSummaryRatio * estTokens)
-  if (!unusable) return 'queued'
-  return settings.delegateEnabled ? 'delegate' : 'queued'
+  if (unusable) return settings.delegateEnabled ? 'delegate' : 'queued'
+  return estTokens - summaryTokens < settings.minSpanTokens ? 'below-floor' : 'queued'
 }
 
 /**

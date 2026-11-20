@@ -222,6 +222,18 @@ test('verdict delegate: a summary too large a share of the span', async () => {
   assert.ok(end.value.estTokens > 0)
 })
 
+test('verdict below-floor: a usable summary that would save less than the floor', async () => {
+  const sim = new Sim()
+  const h = harnessOf(sim, { meter: fakeMeter({ perMessage: 100, perChar: 1 }) })
+  await h.batch([{ name: 'task_begin', args: { title: 'borderline' } }])
+  sim.work(10)
+  // the fake meter prices the summary at 100 + 900 = 1000 tokens: usable (≤ 0.5 × span), but the
+  // fold would replace ~2.2k tokens with 1k
+  const end = await h.one([{ name: 'task_end', args: { summary: 'y'.repeat(900) } }])
+  assert.ok(end.value.estTokens >= 2000 && end.value.estTokens <= 3000, `estTokens ${end.value.estTokens}`)
+  assert.equal(end.value.verdict, 'below-floor')
+})
+
 test('delegateEnabled=false falls back to queued', async () => {
   const sim = new Sim()
   const h = harnessOf(sim, { meter: fakeMeter(), settings: { delegateEnabled: false } })
@@ -238,6 +250,11 @@ test('decideVerdict is a pure function of the task and the settings', () => {
   assert.equal(decideVerdict(open, SUMMARY, 100, 10, settings), 'below-floor')
   assert.equal(decideVerdict(open, 'tiny', 100, 5000, settings), 'delegate')
   assert.equal(decideVerdict(open, SUMMARY, 9000, 5000, settings), 'delegate')
+  // a usable summary is judged by what the fold saves: the span includes the summary itself
+  assert.equal(decideVerdict(open, SUMMARY, 600, 2500, settings), 'below-floor')
+  assert.equal(decideVerdict(open, SUMMARY, 500, 2500, settings), 'queued')
+  // an unusable summary is replaced by the delegate, so only the span counts
+  assert.equal(decideVerdict(open, 'tiny', 2, 2100, settings), 'delegate')
   assert.equal(
     decideVerdict(fakeTask({ ...open, status: 'opening' }), SUMMARY, 1, 5000, settings),
     'below-floor',

@@ -272,8 +272,9 @@ For tasks with verdict `delegate` (no or unusable self-summary) and for self fol
 
 ### 5.5 Interaction with host auto compaction
 
-- Both go through the durable `compaction/start`…`compaction/end` lock; a `busy` error simply retries later.
-- Auto compaction cuts from the head of history. If it shadows part of a task, cut translation (2.4) yields `absorbed`, the task's own fold is skipped, and the auto checkpoint covers that content.
+- Both go through the durable `compaction/start`…`compaction/end` lock. A `busy` answer is not an error: the runner re-reads the state and retries the same task once within the same boundary pass, because the other transaction usually finishes in milliseconds. If the retry is busy too, the pass stops, the task stays `queued` for the next boundary, and one line per task is logged for the process.
+- Auto compaction cuts from the head of history. If it shadows part of a task, cut translation (2.4) yields `absorbed`, the task's own fold is skipped, and the auto checkpoint covers that content. A task can therefore close `queued` and later read `absorbed` without any fold of its own; that is the designed outcome of losing the race, not a bug.
+- In practice the host's own engine is mounted before this plugin, so its hook runs first at a boundary; the contention case is real and was observed live in M3 (`m3/REPORT.md` §7.2).
 - The plugin MUST NOT modify the host's compaction instruction or wrap `ctx.llm.stream` (the taskfold anti-pattern).
 
 ## 6. Tools (behavior)
@@ -367,6 +368,8 @@ Age is `assistantCount - task.openedAt`, both maintained by the projection in O(
 | `summarizationProvider` / `summarizationModel` | "" | strings, set together | Delegate route override |
 
 All fields `.volatile()`; readers clamp invalid values to defaults instead of throwing.
+
+Only `minSpanTokens`, `delegateEnabled`, `minSummaryChars` and `maxSummaryRatio` are read today (by `task_end`'s verdict). `staleTaskSteps` and `showTaskBar` take effect with the hints and the dock (M6), and `summarizationProvider`/`summarizationModel` with the delegate path (M5); until then they are inert, and no settings UI may expose them. A realm `compaction-basic` configured with `thresholdRatio <= retainRatio` fails to mount at all — see `docs/02` §6.
 
 ## 11. Failure modes
 

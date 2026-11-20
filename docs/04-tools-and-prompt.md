@@ -102,16 +102,20 @@ Folds (4):
 #1 T2 · Set up test fixtures · 31 msgs · ~9.8k tokens
 #2 auto compaction · 112 msgs · ~61k tokens
 #4 T6 · Review PR #98 · 18 msgs · ~7.1k tokens
-   #3 T5 · Reproduce the loop · 12 msgs · ~4.2k tokens
+  #3 T5 · Reproduce the loop · 12 msgs · ~4.2k tokens
 ```
+
+The list keeps log order except that a nested fold follows the fold that shadowed it, indented two spaces per level (a fold whose replacement node lies inside another fold's shadowed range). An automatic compaction has no task id and reads `auto compaction`.
 
 ```
 Fold #3 · T6 · Review PR #98 · 18 messages
 L1 assistant: read src/auth/redirect.ts
 L2 tool read: 214 lines
-L3 assistant: [fold #1 T5 "Reproduce the loop"]
+L3 [fold #1 T5 "Reproduce the loop"]
 …
 ```
+
+`L<n>` is the message's position inside the fold; the index, `from`/`to` and `grep` all use it. Each line names the message's role and gives a one-line brief — the first text snippet, or for a tool result the tool name and a result hint (`tool read: 214 lines`). A shadowed fold node replaces the whole line with `[fold #k T5 "title"]` (`[fold #k auto compaction]` when the nested fold has no task). An index longer than 200 messages names its page in the header: `Fold #3 · T6 · … · 250 messages (page 2 of 2)`.
 
 ```
 Fold #3 lines 2-3:
@@ -125,9 +129,11 @@ L2: …const redirect_uri = buildRedirect(…
 …
 ```
 
-Output caps: index 200 lines per page; range 20 messages and ~40k characters total, with `[truncated: narrow from/to]` when cut; grep 50 hits, 200 characters of context each.
+Output caps: index 200 lines per page; range 20 messages and about 40,000 characters total, with `[truncated: narrow from/to]` appended when it cuts (the first requested message is returned whole: a single message cannot be split); grep 50 hits, one per message, about 200 characters of context each, with `[truncated: 50 of 137 hits]` when it cuts.
 
-The build order is [05](05-implementation-plan.md): the no-argument fold list ships in M2, the index, range and grep shapes in M4.
+`grep` is a case-insensitive substring, or a JavaScript regex when written `/…/` (flags allowed; without `i` a regex is case-sensitive). It searches the textual parts of a message — text blocks plus tool-call names and arguments — not its JSON framing; `from`/`to` is the reader for exact JSON. `from` and `to` come together; `from`/`to` and `grep` are alternatives.
+
+Errors are returned as text, never thrown (the tool is read-only and writes no meta): an unknown fold (`fold #9 does not exist; this session has 4 folds.`) or task, a non-integer `fold`/`from`/`to`/`page`, a page past the end, a range outside the fold, `from` without `to`, `from`/`to` together with `grep`, an empty `grep` pattern, and an invalid regex (`bad regex "/[/": …`).
 
 ## 2. `meta` payloads
 

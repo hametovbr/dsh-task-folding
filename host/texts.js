@@ -82,19 +82,195 @@ export function renderEnd(id, verdict, merged, remaining) {
 }
 
 /**
- * @param {{ index: number, taskId: string | null, title: string | null, count: number, tokens: number }[]} rows
+ * The fold list (docs/04 §1): one line per row, in the order recall hands them over — roots in log
+ * order, each followed by the folds it shadowed — indented two spaces per nesting level.
+ *
+ * @param {{ index: number, taskId: string | null, title: string | null, count: number, tokens: number, depth?: number }[]} rows
  */
 export function renderFoldList(rows) {
   if (rows.length === 0) return 'No folds yet.'
   const lines = rows.map((row) => {
     const what = row.taskId === null ? 'auto compaction' : `${row.taskId} · ${row.title ?? ''}`
-    return `#${row.index} ${what} · ${row.count} msgs · ~${formatTokens(row.tokens)} tokens`
+    const indent = '  '.repeat(row.depth ?? 0)
+    return `${indent}#${row.index} ${what} · ${row.count} msgs · ~${formatTokens(row.tokens)} tokens`
   })
   return [`Folds (${rows.length}):`, ...lines].join('\n')
 }
 
-export const RECALL_NOT_AVAILABLE =
-  'Reading a fold back by task, fold, range or grep is not available in this version; only the list of folds is.'
+// ---------------------------------------------------------------------------
+// fold_recall reads (docs/03 §6.3): the span index, the exact range and grep
+
+/** `Fold #3 · T6 · Review PR #98 · 18 messages`, plus the page when the index has several. */
+export function renderIndexHeader(
+  /** @type {number} */ index,
+  /** @type {string | null} */ taskId,
+  /** @type {string | null} */ title,
+  /** @type {number} */ count,
+  /** @type {number} */ page,
+  /** @type {number} */ pages,
+) {
+  const what = taskId === null ? 'auto compaction' : `${taskId} · ${title ?? ''}`
+  const paging = pages > 1 ? ` (page ${page} of ${pages})` : ''
+  return `Fold #${index} · ${what} · ${count} messages${paging}`
+}
+
+/** `L12` followed by the message's one-line brief. */
+export function renderIndexLine(/** @type {number} */ line, /** @type {string} */ brief) {
+  return `L${line} ${brief}`
+}
+
+/** A shadowed fold node: `[fold #2 T5 "Reproduce the loop"]` or `[fold #2 auto compaction]`. */
+export function renderFoldNodeRef(
+  /** @type {number} */ index,
+  /** @type {string | null} */ taskId,
+  /** @type {string | null} */ title,
+) {
+  return taskId === null
+    ? `[fold #${index} auto compaction]`
+    : `[fold #${index} ${taskId} ${JSON.stringify(title ?? '')}]`
+}
+
+/** One line of the span index for a message: `assistant: read src/auth/redirect.ts`, `tool read: 214 lines`. */
+export function renderBrief(
+  /** @type {string} */ role,
+  /** @type {any} */ message,
+  /** @type {string | null} */ toolName,
+) {
+  const blocks = message && Array.isArray(message.content) ? message.content : []
+  if (role === 'tool') {
+    const name = toolName === null || toolName === '' ? null : toolName
+    return name === null
+      ? `tool: ${toolBrief(message, blocks)}`
+      : `tool ${name}: ${toolBrief(message, blocks)}`
+  }
+  const text = firstText(blocks)
+  if (text !== null) return `${role}: ${snippet(text)}`
+  if (role === 'assistant') {
+    const names = toolCallNames(blocks)
+    if (names.length > 0) return `${role}: ${names.join(', ')}`
+  }
+  return `${role}: (empty)`
+}
+
+/** Longest brief text; the index line stays one line (docs/04 §1). */
+const BRIEF_MAX = 100
+
+/** @param {any[]} blocks */
+function firstText(blocks) {
+  for (const block of blocks) {
+    if (block && block.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') {
+      return block.text
+    }
+  }
+  return null
+}
+
+/** @param {any[]} blocks */
+function toolCallNames(blocks) {
+  /** @type {string[]} */
+  const names = []
+  for (const block of blocks) {
+    if (block && block.type === 'tool-call' && typeof block.name === 'string') names.push(block.name)
+  }
+  return names
+}
+
+/** @param {any} message @param {any[]} blocks */
+function toolBrief(message, blocks) {
+  const text = firstText(blocks) ?? ''
+  if (message && message.isError === true) return text === '' ? 'error' : `error: ${snippet(text)}`
+  const lines = text.trim() === '' ? 0 : text.replace(/\s+$/, '').split('\n').length
+  if (lines > 1) return `${lines} lines`
+  return lines === 0 ? '(empty)' : snippet(text)
+}
+
+/** One line, whitespace collapsed, capped. */
+function snippet(/** @type {string} */ text) {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length <= BRIEF_MAX ? flat : `${flat.slice(0, BRIEF_MAX - 1).trimEnd()}…`
+}
+
+/** `Fold #3 lines 2-3:` */
+export function renderRangeHeader(
+  /** @type {number} */ index,
+  /** @type {number} */ from,
+  /** @type {number} */ to,
+) {
+  return `Fold #${index} lines ${from}-${to}:`
+}
+
+/** `L2 {"role":"tool", …}` */
+export function renderRangeLine(/** @type {number} */ line, /** @type {any} */ message) {
+  return `L${line} ${JSON.stringify(message)}`
+}
+
+export const RANGE_TRUNCATED = '[truncated: narrow from/to]'
+
+/** `Fold #3 grep "redirect_uri" (4 hits):` */
+export function renderGrepHeader(
+  /** @type {number} */ index,
+  /** @type {string} */ pattern,
+  /** @type {number} */ hits,
+) {
+  return `Fold #${index} grep ${JSON.stringify(pattern)} (${hits} hit${hits === 1 ? '' : 's'}):`
+}
+
+/** `Fold #3 grep "redirect_uri": no hits.` */
+export function renderGrepEmpty(/** @type {number} */ index, /** @type {string} */ pattern) {
+  return `Fold #${index} grep ${JSON.stringify(pattern)}: no hits.`
+}
+
+/** `L2: …const redirect_uri = buildRedirect(…` */
+export function renderGrepHit(
+  /** @type {number} */ line,
+  /** @type {string} */ context,
+  /** @type {boolean} */ leading,
+  /** @type {boolean} */ trailing,
+) {
+  return `L${line}: ${leading ? '…' : ''}${context}${trailing ? '…' : ''}`
+}
+
+/** @param {number} shown @param {number} total */
+export const GREP_TRUNCATED = (shown, total) => `[truncated: ${shown} of ${total} hits]`
+
+// ---------------------------------------------------------------------------
+// fold_recall errors (returned as text: the tool is read-only, so nothing throws)
+
+/** @param {unknown} value */
+const quoted = (value) => JSON.stringify(value) ?? String(value)
+/** `no fold has task T9; call fold_recall without arguments to list the folds.` */
+export const NOT_FOUND_TASK = (/** @type {string} */ task) =>
+  `no fold has task ${task}; call fold_recall without arguments to list the folds.`
+/** @param {number} fold @param {number} total */
+export const NOT_FOUND_FOLD = (fold, total) =>
+  total === 0
+    ? 'no folds yet.'
+    : `fold #${fold} does not exist; this session has ${total} fold${total === 1 ? '' : 's'}.`
+/** @param {unknown} page */
+export const PAGE_INVALID = (page) => `page must be a number of 1 or more, not ${quoted(page)}.`
+/** @param {number} page @param {number} total @param {number} pages */
+export const PAGE_NOT_FOUND = (page, total, pages) =>
+  `this fold has ${total} messages in ${pages} page${pages === 1 ? '' : 's'}; page ${page} does not exist.`
+/** @param {number} from @param {number} to @param {number} total */
+export const RANGE_OUT_OF_BOUNDS = (from, to, total) =>
+  `lines ${from}-${to} are outside this fold: it has ${total} messages.`
+/** @param {number} from @param {number} to */
+export const RANGE_BACKWARDS = (from, to) => `from (${from}) is after to (${to}).`
+export const RANGE_NEEDS_BOTH = 'give both from and to as message line numbers, or neither.'
+export const RANGE_OR_GREP = 'use either from/to or grep, not both.'
+export const NEED_FOLD = 'name the fold with fold or task, then add from/to or grep.'
+/** @param {unknown} value */
+export const BAD_FOLD_ARG = (value) => `fold must be a fold number from the list, not ${quoted(value)}.`
+/** @param {unknown} value */
+export const BAD_TASK_ARG = (value) => `task must be a task id such as T7, not ${quoted(value)}.`
+/** @param {unknown} value */
+export const BAD_GREP_ARG = (value) => `grep must be text or /regex/, not ${quoted(value)}.`
+export const GREP_EMPTY = 'grep needs a non-empty pattern.'
+export const ERR_EMPTY_REGEX = 'the regex is empty'
+/** Role label for a shadowed event that derives no message. */
+export const UNKNOWN_ROLE = 'message'
+/** @param {string} pattern @param {string} reason */
+export const BAD_REGEX = (pattern, reason) => `bad regex ${JSON.stringify(pattern)}: ${reason}.`
 
 /**
  * The node a whole task collapses into (docs/04 §6). The host frames it with its own checkpoint

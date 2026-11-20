@@ -120,11 +120,13 @@ Tasks:
 1. `engine-adapter.js`: resolve the base class (bare import, then the documented fallback), build the subclass whose `summarize()` returns prepared blocks with no LLM call, construct it with `auto: false`; expose `foldRegion(start, end, agent, signal, blocks)`. All `node_modules` probing lives here and nowhere else.
 2. `fold-runner.js`: pre-step and turn-stopping handlers; due selection; summary extraction from the end call arguments; node text ([04 §6](04-tools-and-prompt.md#6-fold-node-text)); balanced-edge assertion; error handling per [03 §5.3](03-architecture.md#53-self-summary-fold-default-path); per-session in-flight guard.
 3. Timing: measure pre-step handler time; log a warning above 100 ms.
-4. Tests: runner against a fake engine (call order, inner-first, busy retry, demotion to delegate); contract test of the adapter against the real published `dsh-compaction-basic` tarball (`scripts/contract-check.js`, run in CI): exports, `summarize` hook dispatch, `compactRegion` signature, constructor injections.
+4. Tests: runner against a fake engine (call order, inner-first, busy retry, demotion to delegate); contract test of the adapter against the real published `dsh-compaction-basic` tarball (`scripts/contract-check.js`, run weekly by `.github/workflows/contract.yml`): exports, `summarize` hook dispatch, `compactRegion` signature, constructor injections.
 
 Acceptance: in a live session, a closed task above the floor folds at the next step boundary after the report; the fold node shows the title and footer; pre-step p95 < 100 ms on a session with ≥ 5k events.
 
-### M4 — Recall
+### M4 — Recall — **done 2026-11-21**
+
+Result: `host/recall.js` (list with nesting, index with paging, exact range, grep — all over a fold row's `shadowedSeqs` and `deriveEventMessage`, never a log snapshot), the real `fold_recall` dispatch in `host/tools.js`, the renderers in `host/texts.js`, and 19 tests, one of them over the live fixture `test/fixtures/logs/m4-recall.jsonl`. Live: two tasks folded, then a session that used `fold_recall` only — list, index, grep, range — and answered `INV-2026-4417`, a value that exists only inside a shadowed message, without re-reading any file. The same milestone closed §1 of [08](08-followups.md): busy retry inside one pass with one log line (F1), a bulk region estimate and performance guards moved to their own `npm run perf` step (F2), a scheduled `contract` workflow plus the `.tmp` bug it exposed (F4), and the settings/configuration notes (F5, F6). Details: [`m4/REPORT.md`](../m4/REPORT.md).
 
 Tasks:
 
@@ -183,6 +185,6 @@ File an issue/PR on `deepseek-ai/deepseek-harness` proposing either `compactRegi
 |---|---|---|
 | Self-summary quality is worse than a dedicated summarizer | More recalls, worse continuations | Measured in M7; delegate stays available per task and as a global mode |
 | `meta` or replace events are not delivered to projections as assumed | Core design breaks | Verified in M0 on 0.2.2-rc.5; the real-log fixtures pin the shapes |
-| Host refactors `BasicCompactionEngine` | Folds stop | Isolated adapter + contract test in CI + upstream proposal (M8) |
+| Host refactors `BasicCompactionEngine` | Folds stop | Isolated adapter + the weekly contract check + upstream proposal (M8) |
 | Models ignore the task discipline | No folds | Host auto compaction still works; implicit per-turn task as a follow-up option |
 | Background delegate generation races with the main turn (region changes before commit) | Wasted generation calls | Region key check before commit; at most one generation in flight; delegate is a fallback, so the rate is low |

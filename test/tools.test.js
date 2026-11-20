@@ -262,7 +262,7 @@ test('decideVerdict is a pure function of the task and the settings', () => {
   assert.equal(decideVerdict(fakeTask({ ...open, beginCut: -1 }), SUMMARY, 1, 5000, settings), 'absorbed')
 })
 
-test('fold_recall lists folds and refuses detail work in this milestone', async () => {
+test('fold_recall lists folds, then reads a fold back by number', async () => {
   const { sim, h } = harness()
   const empty = await h.call('fold_recall', {})
   assert.equal(empty.text, 'No folds yet.')
@@ -276,9 +276,14 @@ test('fold_recall lists folds and refuses detail work in this milestone', async 
   assert.match(list.text, /#1 auto compaction · \d+ msgs · ~[\d.]+k? tokens/)
 
   const detail = await h.call('fold_recall', { fold: 1 })
-  assert.equal(detail.text, texts.RECALL_NOT_AVAILABLE)
-  const byTask = await h.call('fold_recall', { task: 'T1' })
-  assert.equal(byTask.text, texts.RECALL_NOT_AVAILABLE)
+  const [head, ...lines] = detail.text.split('\n')
+  assert.match(head, /^Fold #1 · auto compaction · \d+ messages$/)
+  assert.equal(lines.length, sim.state.folds[0]?.shadowedCount)
+  for (const [i, line] of lines.entries()) assert.match(line, new RegExp(`^L${i + 1} \\S`))
+  assert.equal(detail.value.text, detail.text)
+
+  const unknown = await h.call('fold_recall', { task: 'T9' })
+  assert.equal(unknown.text, texts.NOT_FOUND_TASK('T9'))
 })
 
 test('a task id is not reused after the projection has moved on', async () => {

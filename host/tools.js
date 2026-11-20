@@ -3,6 +3,7 @@
 // only durable write is `output.presentationMeta` → tool/result.data.meta.
 
 import { isAbsorbed } from './cuts.js'
+import { foldGrep, foldIndex, foldOrdinalForTask, foldRange, listFolds } from './recall.js'
 import * as texts from './texts.js'
 
 /** @typedef {import('./types.js').State} State */
@@ -218,25 +219,53 @@ export function createTools(deps) {
       },
     },
     /**
+     * The dispatch the schema implies (docs/04 §1): no arguments lists the folds; `fold` or `task`
+     * picks one; `from`/`to` reads an exact range of it; `grep` searches it. Reads are from the
+     * log only, so an unknown fold, an unknown task or a bad pattern is a clean text, not a throw.
+     *
      * @param {any} args
      * @param {any} exec
      */
     async execute(args, exec) {
       assertDirect(exec, 'fold_recall')
-      const state = await deps.stateOf(exec.agent.session)
-      const keys = args ? Object.keys(args).filter((key) => args[key] !== undefined) : []
-      if (keys.length > 0) return { text: texts.RECALL_NOT_AVAILABLE }
-      return {
-        text: texts.renderFoldList(
-          state.folds.map((row, i) => ({
-            index: i + 1,
-            taskId: row.taskId,
-            title: row.taskId === null ? null : (state.tasks[row.taskId]?.title ?? null),
-            count: row.shadowedCount,
-            tokens: row.shadowedTokens,
-          })),
-        ),
+      const session = exec.agent.session
+      const state = await deps.stateOf(session)
+      const given = /** @type {Record<string, any>} */ (args && typeof args === 'object' ? args : {})
+      /** @param {string} key */
+      const option = (key) => (given[key] === undefined || given[key] === null ? undefined : given[key])
+      const fold = option('fold')
+      const task = option('task')
+      const from = option('from')
+      const to = option('to')
+      const grep = option('grep')
+      const page = option('page')
+
+      /** @type {number | null} */
+      let ordinal = null
+      if (fold !== undefined) {
+        if (!Number.isInteger(fold)) return { text: texts.BAD_FOLD_ARG(fold) }
+        ordinal = fold
+      } else if (task !== undefined) {
+        if (typeof task !== 'string') return { text: texts.BAD_TASK_ARG(task) }
+        ordinal = foldOrdinalForTask(state, task)
+        if (ordinal === null) return { text: texts.NOT_FOUND_TASK(task) }
       }
+
+      if (ordinal === null) {
+        const narrows = from !== undefined || to !== undefined || grep !== undefined || page !== undefined
+        return { text: narrows ? texts.NEED_FOLD : listFolds(state, session) }
+      }
+      if (grep !== undefined && (from !== undefined || to !== undefined)) return { text: texts.RANGE_OR_GREP }
+      if (from !== undefined || to !== undefined) {
+        if (!Number.isInteger(from) || !Number.isInteger(to)) return { text: texts.RANGE_NEEDS_BOTH }
+        return { text: foldRange(state, session, ordinal, from, to) }
+      }
+      if (grep !== undefined) {
+        if (typeof grep !== 'string') return { text: texts.BAD_GREP_ARG(grep) }
+        return { text: foldGrep(state, session, ordinal, grep) }
+      }
+      if (page !== undefined && !Number.isInteger(page)) return { text: texts.PAGE_INVALID(page) }
+      return { text: foldIndex(state, session, ordinal, page === undefined ? 1 : page) }
     },
   }
 

@@ -1,69 +1,98 @@
 # 07 — Open questions
 
-Each question names the assumption the design makes today, why it matters, and how to settle it. Most are settled in milestone M0 ([05](05-implementation-plan.md#m0--host-verification-spike-no-plugin-code)). Record answers here, with the host version, and update the affected documents.
+Each question names the assumption, why it matters, and how it was (or will be) settled. Answered questions keep their record so the reasoning behind the design stays traceable. Evidence for M0 answers: [`m0/REPORT.md`](../m0/REPORT.md) (host 0.2.2-rc.5, 2026-11-20).
+
+| Q | Topic | Status |
+|---|---|---|
+| [Q1](#q1) | PTC calls | Answered — assumption corrected |
+| [Q2](#q2) | `meta` durability | Answered — confirmed |
+| [Q3](#q3) | Idle scheduling | Answered — confirmed; design changed (ADR 0006) |
+| [Q4](#q4) | Module resolution | Partly answered — layout-dependent; peers unverified |
+| [Q5](#q5) | Checkpoint framing | Open (M7) |
+| [Q6](#q6) | Deferred `fold_recall` | Open (M7) |
+| [Q7](#q7) | Loader row, dock slot | Answered — confirmed |
+| [Q8](#q8) | Replacement events | Answered — confirmed, with precisions |
+| [Q9](#q9) | Concurrency in a batch | Answered — refuted (sequential) |
+| [Q10](#q10) | Implicit per-turn task | Open (after M7) |
+| [Q11](#q11) | Recording a failed delegate generation | Answered from source; confirm live in M5 |
+| [Q12](#q12) | Source of `system`/`tools` for delegate requests | Partly answered |
 
 <a id="q1"></a>
 ## Q1 — PTC (`run_code`) calls
 
-**Assumption:** task tools called from inside a `run_code` program produce no `tool/result` event of their own (they are recorded in `tool/ptc-dispatch`), so batch tracking cannot see them. The tools refuse when `exec.rootCallId` is set.
-**Why it matters:** a silently ignored begin/end would corrupt the stack.
-**Settle:** M0 task 3. Also check whether a tool can opt out of the PTC SDK entirely (not found in `packages/core/tools/src/contracts.ts`); if it can, prefer that over refusal.
+**Assumption was:** task tools called from `run_code` produce no `tool/result` of their own; refuse when `exec.rootCallId` is set.
+**Answer (M0, S4/S4b):** the first half holds — a nested call produces `tool/ptc-dispatch-start` + `tool/ptc-dispatch` (with the call's `meta` on `tool/ptc-dispatch.data.meta`) and no `tool/result`. The detection was wrong: `exec.rootCallId` is set for **every** call; for a direct call it equals the call's own id. A nested call has `exec.callId = "<rootCallId>:ptc:<n>"`. PTC ships disabled (`tool-executor-ptc: disabled: true`) and requires disabling the native executor.
+**Design change:** refuse when `exec.callId !== exec.rootCallId` (03 §6.1); the reducer ignores `tool/ptc-dispatch`.
 
 <a id="q2"></a>
 ## Q2 — `meta` durability
 
-**Assumption:** `output.presentationMeta` output is persisted as `tool/result.data.meta`, survives restart and session-format migrations, and reaches projections on replay.
-**Why it matters:** it is the plugin's only durable write channel.
-**Settle:** M0 task 1, plus a check of the session-format migration packages for how they treat `meta`.
+**Answer (M0, S1/S6):** confirmed. `presentationMeta` output is persisted verbatim as `tool/result.data.meta`, survives a full process restart and resume, and is replayed into a fresh projection (resume: `inheritedEventCount: 0`, whole-log replay; fork: inherited count, prefix replay).
+**Design change:** none.
 
 <a id="q3"></a>
 ## Q3 — Idle scheduling for delegate folds
 
-**Assumption:** calling `agent.whenIdle().then(() => agent.runMaintenance(job))` from `agent/turn-stopping` (without awaiting) runs `job` once the agent is idle; user input arriving meanwhile waits in the inbox until the job settles; `runMaintenance` throws synchronously if a turn already started.
-**Why it matters:** decides whether delegate folds can stay off the critical path.
-**Settle:** M0 task 4. Fallback: run delegate folds inside `agent/turn-stopping` (delays idling, never a step).
+**Assumption was:** `agent.whenIdle().then(() => agent.runMaintenance(job))` from `turn-stopping` runs `job` after the turn without hurting the user.
+**Answer (M0, S5):** it runs right after the turn, but a user message sent meanwhile is **held until the job settles** and does not abort it. A 30–70 s delegate summary would therefore delay the user's next turn by up to that long.
+**Design change:** delegate summaries are generated in the background, outside any lock or maintenance slot, and committed at the next step boundary like self-summaries ([ADR 0006](adr/0006-background-delegate.md), 03 §5.4). `runMaintenance` is not used.
 
 <a id="q4"></a>
 ## Q4 — Resolving host packages from a profile bundle
 
-**Assumption:** `@deepseek-ai/dsh-compaction-basic`, `@deepseek-ai/dsh-llm` and `@deepseek-ai/schemastery` may not be resolvable with a bare `import` from a profile-installed bundle (taskfold needed path probing and `createRequire`).
-**Why it matters:** decides how much probing `engine-adapter.js` and `settings.js` need.
-**Settle:** M0 task 6. Also check whether declaring them as `peerDependencies` makes `dsh plugin add` link them.
+**Answer (M0):** layout-dependent. With the bundle inside `profiles/<name>/node_modules/` (registry install), bare imports of `@deepseek-ai/dsh-compaction-basic`, `…/dsh-compaction`, `…/dsh-llm` and `@deepseek-ai/schemastery` succeed. With a development install (`dsh plugin add <path>` → pnpm `link:`), they fail because Node resolves the link's real path.
+**Design change:** `engine-adapter.js` and `settings.js` try a bare import first, then `createRequire` anchored at the DSH runtime's `node_modules` (development installs only).
+**Still open:** whether declaring the packages as `peerDependencies` makes `dsh plugin add` link them. Settle in M2 with a copy of the probe.
 
 <a id="q5"></a>
 ## Q5 — Checkpoint framing for mid-history folds
 
-**Assumption:** the host frames every summary with a preamble written for head-of-history checkpoints ("…Continue the task directly from the messages that follow…"). For a fold in the middle of history this is slightly misleading but harmless.
-**Why it matters:** wording that confuses the model costs quality; the preamble also costs ~60 tokens per fold.
-**Settle:** evaluate in M7; include an option to override framing in the upstream proposal (M8).
+**Assumption:** the host frames every summary with a preamble written for head-of-history checkpoints ("…Continue the task directly from the messages that follow…"; confirmed verbatim in M0 journals). For a mid-history fold this is slightly misleading.
+**Settle:** evaluate in M7; include a framing option in the upstream proposal (M8).
 
 <a id="q6"></a>
 ## Q6 — Deferred loading of `fold_recall`
 
-**Assumption:** `deferLoading: true` would save ~210 tokens per request, at the cost of a lookup when the model first needs recall.
-**Settle:** M7, measure recall frequency and first-use behavior with and without deferral.
+**Assumption:** `deferLoading: true` saves ~210 tokens per request at the cost of a lookup on first use.
+**Settle:** M7.
 
 <a id="q7"></a>
 ## Q7 — One Loader row for Host + Client, and the dock slot
 
-**Assumption:** following the official `templates/decoration`, one row named after the package can carry both the Host `apply` and the Client module; the dock slot is `conversation.composer.dock` or `conversation.input.dock`.
-**Settle:** M0 task 5 with `cordis_inspect` (`Slots.listSubTree`).
+**Answer (M0, S0):** one row named after the package serves both halves. Both dock slots exist; `conversation.input.dock` renders on the home screen and in conversations, `conversation.composer.dock` only in an open conversation. `slots.inject` with a wrong slot name is silent.
+**Design change:** use `conversation.input.dock` (03 §9).
 
 <a id="q8"></a>
 ## Q8 — Replacement events in projections
 
-**Assumption:** every surface replacement (compaction checkpoint `user/message`, pruner `tool/result`) reaches projection `apply` with top-level `surfaceOp: { op: 'replace', startSeq, endSeq }` and a complete `sourceEventSeqs`, as `packages/core/session/src/types.ts` documents.
-**Why it matters:** cut translation depends on it entirely.
-**Settle:** M0 task 2. Fallback: derive shadowed sets from `compaction/summary.data.shadowedSeqs` and `compaction/prune.data.shadowedSeqs`, which immediately precede their replacement events by contract.
+**Answer (M0, S3/S3b/S3c):** confirmed. Checkpoint (`user/message`) and prune (`tool/result`) replacements reach `apply` with top-level `surfaceOp: { op: 'replace', startSeq, endSeq }` and complete `sourceEventSeqs`. Precisions:
+- for a checkpoint, `sourceEventSeqs` = the checkpoint's `compaction/start` and `compaction/summary` seqs + `shadowedSeqs`; cut membership is unaffected (those two are not surface nodes);
+- `shadowedSeqs` are in surface order, not numeric order;
+- a prune is preceded by `compaction/prune` and its replacement `tool/result` **keeps the original `meta`**.
+**Design change:** the reducer reads `meta` only from `append` results (03 §4.3); invariant 8 added.
 
 <a id="q9"></a>
 ## Q9 — Concurrent tool execution within a batch
 
-**Assumption:** calls of one assistant message may execute concurrently, so two `task_begin`s in one batch can read the same `nextId`; an in-memory per-session reservation prevents duplicate ids.
-**Settle:** read `packages/core/tool-executor-native` scheduling; keep the reservation regardless (cheap).
+**Answer (M0, S2):** refuted for the native executor: the calls of one message run sequentially (`tool/call` → `tool/result` → next), each result committed before the next call starts.
+**Design change:** ids come from `state.nextId`; the in-memory high-water mark stays only as a cheap guard (03 §6.1). PTC sub-calls can run in parallel, but task tools refuse PTC.
 
 <a id="q10"></a>
 ## Q10 — Implicit per-turn task
 
-**Open design question:** should a turn that ends with no open task and a span above the floor be folded automatically (delegate path, next idle)? It would cover models that ignore the discipline, at the cost of folding work the model may still want verbatim.
-**Settle:** after M7 data on how often tasks are skipped; ship off by default if added.
+**Open design question:** should a turn that ends with no open task and a span above the floor be folded automatically (delegate path)? It would cover models that ignore the discipline, at the cost of folding work the model may still want verbatim.
+**Settle:** after M7 data on how often tasks are skipped; off by default if added.
+
+<a id="q11"></a>
+## Q11 — Recording a failed delegate generation durably
+
+**Assumption:** calling `compactRegion` on a valid region with an adapter `summarize()` that rejects immediately makes the host append `compaction/start` + `compaction/end{ error }` and release the lock, at no LLM cost. The reducer counts that toward the delegate failure cap (03 §5.4).
+**Why it matters:** without a durable record, a task whose summary keeps failing would be retried (and billed) after every restart.
+**Answer from source (`packages/compaction/compaction-basic/src/region.ts` L211–L250, rc.5):** `compaction/start` is appended before `summarize()` runs; any error thrown from the summarize stage (unless `recover()` handles it — that path is for context-overflow recovery) makes the transaction append `compaction/end { error: errorChain(error) }` before rethrowing. So a rejecting adapter `summarize()` produces exactly the durable failure record the design needs.
+**Settle:** confirm live in M5. Fallback: an in-memory cap only (bounded re-billing: at most `maxDelegateFailures` per process lifetime), documented in ADR 0005.
+
+<a id="q12"></a>
+## Q12 — Source of `system` and `tools` for delegate requests
+
+**Answer (partial, M0 journals):** the system prompt is in history (`request/context.systemPromptUpdate: "in-history"`, a `system/message` surface node), and `request/header.data.header` carries `tools` and `config` (`provider`, `model`, `maxTokens`, `reasoningEffort`). A request built from the surface prefix plus the latest header's `tools` should match the main request's prefix.
+**Still open:** confirm the provider cache hit ratio for such a request (M5, `scripts/verify-cache.js`), and whether `GenerateOptions` needs any header field beyond `tools` and `config` to keep the prefix identical.

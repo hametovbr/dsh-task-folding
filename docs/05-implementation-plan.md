@@ -11,8 +11,8 @@ The plan is ordered so that every milestone ends with something testable, and th
 | Tests | `node:test` + `node:assert`, no framework | Zero dependencies in the published package. |
 | Property tests | `fast-check` (devDependency only) | Invariants 1–4 in [03 §12](03-architecture.md#12-invariants-tested). |
 | Lint/format | `eslint` + `prettier` (devDependencies) | — |
-| Packaging | One npm package, one Loader row, Host `apply` + Client module in the same package | Matches the official template ([07 Q7](07-open-questions.md#q7) to confirm). |
-| Peer dependencies | `@deepseek-ai/dsh`, `@deepseek-ai/dsh-compaction-basic`, `@deepseek-ai/dsh-llm`, all `^0.2.2-rc.1` | Hosts with `tool/result.meta` and `agent/turn-stopping`. |
+| Packaging | One npm package, one Loader row, Host `apply` + Client module in the same package | Matches the official template; confirmed live in M0. |
+| Peer dependencies | `@deepseek-ai/dsh`, `@deepseek-ai/dsh-compaction-basic`, `@deepseek-ai/dsh-llm`, all `^0.2.2-rc.1` | Hosts with `tool/result.meta` and `agent/turn-stopping`. Live-verified on 0.2.2-rc.5 only; whether `dsh plugin add` links peers is unverified ([07 Q4](07-open-questions.md#q4)). |
 | Language of all texts | English (code, comments, docs, model-facing text). Locale files: `en` required. | Project rule. |
 
 ## 2. Repository layout
@@ -52,7 +52,9 @@ docs/
 
 Each milestone lists tasks, then the acceptance criteria that close it.
 
-### M0 — Host verification spike (no plugin code)
+### M0 — Host verification spike (no plugin code) — **done 2026-11-20**
+
+Result: [`m0/REPORT.md`](../m0/REPORT.md) (host 0.2.2-rc.5). Q1, Q2, Q3, Q7, Q8 confirmed, Q4 partial (layout-dependent), Q9 refuted. Design changes applied: PTC detection via `exec.callId`, replacement results ignored for `meta`, `step/end` as a batch-close signal, delegate folds moved to background generation ([ADR 0006](adr/0006-background-delegate.md)), dock slot fixed to `conversation.input.dock`. Recorded session journals for fixtures: `m0/sessions/`.
 
 Goal: answer the open questions that could change the design before writing it. Needs a machine with DSH installed and an API key. Ready-to-run instructions for an on-host agent, including the probe bundle and the report format: [`m0/AGENT_PROMPT.md`](../m0/AGENT_PROMPT.md).
 
@@ -77,9 +79,10 @@ Tasks:
 1. `projection.js`: state type, `stateSchema.parse` (hand-written validator, no zod import), `init`, `apply` per the table in [03 §4.3](03-architecture.md#43-reducer), wire `view` with reference memoization.
 2. `cuts.js`: `translateCuts(state, replaceEvent)`.
 3. `planner.js`: `dueTasks(state)`, `resolveRegion(task, nodes)`.
-4. Fixture builders: a small DSL that produces event sequences (`msg(calls…)`, `result(callId, meta?)`, `compact(range)`, `prune(seq)`, `fork(at)`), plus a surface simulator that applies `replace` ops so tests can compare planner regions against the real surface.
-5. Tests:
-   - unit: each reducer row; interrupted batch; relay `end+begin` in one batch; nested tasks; merged descendants; absorbed begin/end; our fold vs auto fold vs pruner replacement; delegate failure cap;
+4. Real-log fixtures: a loader that reads the decoded M0 journals in `m0/sessions/*.jsonl` (one JSON event per line, header line without `seq`) and replays them through `apply`; snapshot the resulting state.
+5. Fixture builders: a small DSL that produces event sequences (`msg(calls…)`, `result(callId, meta?)`, `compact(range)`, `prune(seq)`, `fork(at)`), plus a surface simulator that applies `replace` ops so tests can compare planner regions against the real surface.
+6. Tests:
+   - unit: each reducer row; a pruned task-mark result (replacement keeps `meta`) is not re-applied; interrupted batch; relay `end+begin` in one batch; nested tasks; merged descendants; absorbed begin/end; our fold vs auto fold vs pruner replacement; delegate failure cap;
    - property (fast-check): random interleavings of begin/end/other calls/compactions/prunes → invariants 1–4;
    - replay equivalence: `apply` from scratch vs from a JSON round-tripped checkpoint at every position.
 
@@ -127,12 +130,12 @@ Acceptance: recall works for task folds, auto compactions and pruned results; no
 
 Tasks:
 
-1. `summarizer.js`: prefix-anchored request (with `toolHistory`), instruction ([03 §7.2](03-architecture.md#72-delegate-instruction)) with numbered span index and size budget, output validation.
-2. Idle scheduling via `whenIdle()` + `runMaintenance()` (per the M0 answer to Q3).
-3. Durable failure cap via the projection.
+1. `summarizer.js`: prefix-anchored request (surface prefix + span + instruction; `tools`/`config` from the latest `request/header`; `toolHistory`), instruction ([03 §7.2](03-architecture.md#72-delegate-instruction)) with numbered span index and size budget, output validation.
+2. Two-phase runner ([03 §5.4](03-architecture.md#54-delegate-fold-fallback-path)): background generation with one in flight per session, commit at the next boundary if the region is unchanged.
+3. Durable failure cap: record each failed generation as a zero-cost failed compaction attempt; verify the host appends `compaction/start` + `compaction/end{error}` for a `summarize()` that rejects ([07 Q11](07-open-questions.md#q11)).
 4. Port taskfold's cache verification idea as `scripts/verify-cache.js`: from a live session log, compare each delegate fold's `usage` (cache read vs fresh input) with its span size.
 
-Acceptance: a task closed with an empty summary folds after the turn without delaying the user's next message; three consecutive failures stop retries across a restart; cache-hit ratio ≥ 80% on delegate folds.
+Acceptance: a task closed with an empty summary folds at a step boundary after its summary is generated, with no step or user message waiting on generation; three consecutive failures stop retries across a restart; cache-hit ratio ≥ 80% on delegate folds.
 
 ### M6 — Hints and UI
 
@@ -171,7 +174,7 @@ File an issue/PR on `deepseek-ai/deepseek-harness` proposing either `compactRegi
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Self-summary quality is worse than a dedicated summarizer | More recalls, worse continuations | Measured in M7; delegate stays available per task and as a global mode |
-| `meta` or replace events are not delivered to projections as assumed | Core design breaks | M0 verifies before M1 |
+| `meta` or replace events are not delivered to projections as assumed | Core design breaks | Verified in M0 on 0.2.2-rc.5; the real-log fixtures pin the shapes |
 | Host refactors `BasicCompactionEngine` | Folds stop | Isolated adapter + contract test in CI + upstream proposal (M8) |
 | Models ignore the task discipline | No folds | Host auto compaction still works; implicit per-turn task as a follow-up option |
-| `runMaintenance` semantics differ from the reading in 02 | Delegate folds block or never run | M0 task 4; fallback: run delegate in `turn-stopping` (blocks idle, not steps) |
+| Background delegate generation races with the main turn (region changes before commit) | Wasted generation calls | Region key check before commit; at most one generation in flight; delegate is a fallback, so the rate is low |

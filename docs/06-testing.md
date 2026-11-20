@@ -9,7 +9,7 @@
 | Replay | Projection from scratch vs from checkpoints | `test/replay.test.js` | every commit |
 | Component | Tools and fold runner against a fake session and fake engine | `test/tools.test.js`, `test/fold-runner.test.js` | every commit |
 | Contract | Adapter assumptions against published host packages | `scripts/contract-check.js` | CI, nightly, and before each release |
-| Live | Real DSH host, scripted sessions | `test/live/` (manual, needs API key) | before each release |
+| Live | Real DSH host, scripted sessions driven headlessly (`dsh --profile <p> --json [--session-id <id>] "<task>"`, profile = `dsh-base` + `dsh-headless` + this plugin; see [02 §11](02-host-api.md#11-operations-live)) | `test/live/` (needs API key) | before each release |
 | Evaluation | Task suite, three configurations | `eval/` | M7 and on demand |
 
 ## 2. Fixtures
@@ -35,7 +35,7 @@ The DSL also maintains a simulated surface (`nodes`) by applying `replace` ops b
 
 ### 2.2 Recorded logs
 
-Real session logs (JSONL) captured in M0/M2 from a live host, scrubbed of secrets, stored under `test/fixtures/logs/`. They pin the real event shapes (`tool/result` format v4, `meta` placement, replacement envelopes). Every reducer change must still replay them without throwing and with unchanged terminal verdicts (snapshot test).
+Real session logs (JSONL) captured from a live host, scrubbed of secrets. The M0 journals in `m0/sessions/` are the first set (decoded from `session.v4.jsonl.zstd`; first line is the session header without `seq`): batches of several calls (S2), a resume (S1), three automatic checkpoints (S3b), a `/compact` (S0-S3c-S5), tool-result prunes (S3), PTC dispatches (S4, S4b) and a fork (S6). Later captures go under `test/fixtures/logs/`. They pin the real event shapes (`tool/result` format v4, `meta` placement, replacement envelopes). Every reducer change must still replay them without throwing and with unchanged terminal verdicts (snapshot test).
 
 ## 3. Invariants as properties
 

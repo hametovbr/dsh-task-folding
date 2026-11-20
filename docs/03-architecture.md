@@ -7,7 +7,7 @@ This document is the design the implementation follows. Host APIs are referenced
 **Goals**
 
 1. The model marks finished units of work; each unit leaves the surface as one short titled summary.
-2. Folding never blocks the agent noticeably (self-summary path: p95 < 100 ms per step).
+2. Folding never blocks the agent or the user's next message noticeably (commit p95 < 100 ms per step; summary generation, when needed, runs in the background).
 3. All plugin state is derived from the session log; fork, resume and replay need no plugin-side storage.
 4. Originals are recoverable exactly, from the log only.
 5. The protocol the model must follow is small: three tools, no rules about which calls may share a message, and at most ~850 tokens (3,400 characters) for the prompt section and all tool schemas together.
@@ -133,6 +133,7 @@ type State = {
   folds: FoldRow[]                       // every compaction/summary in log order (recall index)
   pendingSummary: PendingSummary | null  // compaction/summary seen, replacement not yet
   hint: { key: string } | null           // durable latch for the stale-task hint
+  lastHeaderSeq: number                  // latest request/header (tools + config for delegate requests)
   failuresSince: Record<string, number>  // delegate tasks → compaction/end{error} count since queued
 }
 
@@ -175,18 +176,23 @@ Size: `folds` grows by one row per compaction (tens per long session); `tasks` b
 | Event | Transition |
 |---|---|
 | `assistant/message` | `lastAssistantSeq = seq`, `assistantCount += 1`. If `batch` is set and still waiting, force-close it first (interrupted batch; its `last` stays as seen). If the message carries a call named `task_begin` or `task_end`, open `batch = { msgSeq: seq, waiting: [all call ids], last: seq, begins: [], ends: [] }`; otherwise `batch = null`. |
-| `tool/result` (append) | If `batch` and the result's `toolCallId ∈ waiting`: remove it, `last = seq`. If `data.meta?.tf === 1`: on `begin` create the task (`status: 'opening'`), push onto `open`, add to `begins`, `nextId = max(nextId, n+1)`; on `end` set `status: 'closing'`, pop it and its `merged` descendants from `open`, store `endMsgSeq = batch.msgSeq`, `endCallId`, verdict fields, add to `ends`. When `waiting` becomes empty, **close the batch**. |
+| `tool/result` with `surfaceOp === 'append'` | If `batch` and the result's `toolCallId ∈ waiting`: remove it, `last = seq`. If `data.meta?.tf === 1`: on `begin` create the task (`status: 'opening'`), push onto `open`, add to `begins`, `nextId = max(nextId, n+1)`; on `end` set `status: 'closing'`, pop it and its `merged` descendants from `open`, store `endMsgSeq = batch.msgSeq`, `endCallId`, verdict fields, add to `ends`. When `waiting` becomes empty, **close the batch**. |
+| `step/end` | If `batch` is set, close it (a step ends only after all its results; this is the normal close path when a call result is missing). |
 | batch close (internal) | For each id in `begins`: `beginCut = last`, `openedAt = assistantCount`, `status: 'open'`. For each id in `ends`: `endCut = last`, `status = verdict`; for `merged` ids: `status: 'merged'`. `batch = null`. |
 | `compaction/summary` | Push a `FoldRow` (with `nodeSeq: null`); set `pendingSummary`. `taskId` is parsed from the first summary line if it matches the fold heading `# <id> · …` (see 7.3); otherwise null. |
 | surface event with `surfaceOp.op === 'replace'` | Let `S = set(sourceEventSeqs)`, `end = surfaceOp.endSeq`, `R = seq`. If `pendingSummary` is set, fill `nodeSeq = R` in its row and clear it. If the row's `taskId` names a `queued`/`delegate` task whose `endCut === end` and whose `beginCut ∉ S` → `status: 'folded'`, `foldIndex`. Then translate every tracked cut of every non-terminal task and every open task (2.4); a `queued`/`delegate` task whose cut becomes absorbed → `status: 'absorbed'`; an open task whose `beginCut` is absorbed keeps running with `beginCut = -1` and is closed `absorbed` by its `task_end`. |
 | `compaction/end` with `data.error` | For every task in `delegate` status: `failuresSince[id] += 1`; when it reaches `maxDelegateFailures` (constant, 3) → `status: 'failed'`. |
-| `user/message` with `source.kind === 'task-folding:hint'` | `hint = { key }` (key embedded in `source`). |
+| `user/message` with `data.source.kind === 'task-folding:hint'` | `hint = { key: data.source.key }`. (`user/message` data is the message itself.) |
+| `request/header` | `lastHeaderSeq = seq` (pointer for the delegate request's tools and config, 5.4). |
 | anything else | unchanged |
 
 Notes:
 
+- **Replacement `tool/result`s MUST NOT be read for `meta`.** The tool-result pruner's replacement keeps the original result's `meta` (observed in M0), so reading it would re-apply a `begin`/`end`. Replacements are handled only by the replace row.
+- `tool/ptc-dispatch` events are ignored: task tools refuse nested calls (6.1), so no task `meta` can appear there.
+- Results of one batch arrive in call order, one after another (the native executor is sequential, M0 Q9); the reducer does not depend on that order.
 - Force-closing an interrupted batch is safe: the host's session repair appends synthetic error results for unanswered calls, so in practice the batch completes normally; the force-close only guards odd logs.
-- A fold that commits while a batch is in flight cannot happen: folds run only at step boundaries (pre-step, turn-stopping, idle maintenance), never between a call and its result.
+- A fold that commits while a batch is in flight cannot happen: commits run only at step boundaries (`pre-step`, `turn-stopping`), never between a call and its result.
 - Counting every `compaction/end{error}` against every `delegate` task over-counts when unrelated compactions fail. That bias is deliberate: it can only stop retries earlier, never re-bill forever ([ADR 0005](adr/0005-durable-state-only.md)).
 
 ### 4.4 Wire view
@@ -238,12 +244,24 @@ Runs inline in `agent/pre-step` (before `next()`) and in `agent/turn-stopping`, 
 
 ### 5.4 Delegate fold (fallback path)
 
-For tasks with verdict `delegate` (no or unusable self-summary) and for self folds demoted in 5.3 step 6.
+For tasks with verdict `delegate` (no or unusable self-summary) and for self folds demoted in 5.3 step 6. Delegate folds are **two-phase**: the summary is generated in the background, then committed exactly like a self fold ([ADR 0006](adr/0006-background-delegate.md)).
 
-- Never runs inside `pre-step`. In `agent/turn-stopping`, the runner schedules (without awaiting — listeners must not await `whenIdle()`) `agent.whenIdle().then(() => agent.runMaintenance(signal => foldDelegated(task, signal)))`; if `runMaintenance` throws because a new turn already started, the task stays `delegate` and is retried at the next turn end ([07 Q3](07-open-questions.md#q3)).
-- The summarization request is taskfold's prefix-anchored envelope, corrected: surface prefix + span + instruction as the final user message, `system`/`tools` from the summarization input, `toolHistory: session.toolHistory()`, provider/model from (config → latest request header → agent options), no `maxTokens` override beyond the host config.
+**Phase 1 — generate (background, nothing waits for it).**
+
+- Started by the runner when a delegate task becomes due, from `pre-step` or `turn-stopping`, as an un-awaited promise. At most one generation per session at a time; others wait their turn.
+- The runner snapshots the region `(start, end)` and the list of span node seqs at start.
+- The request is taskfold's prefix-anchored envelope, corrected: the surface prefix (which begins with the in-history `system/message`) + the span + the instruction as the final user message; `tools` and `config` from the latest `request/header` (`state.lastHeaderSeq` → `eventAt`); `toolHistory: session.toolHistory()`; provider/model from (settings override → header config → agent options). Same prefix as the main requests, so the provider cache is reused.
 - The instruction (7.2) includes a numbered span index and a size budget.
-- Output validation: non-empty text; must open with a `## ` section after at most 3 short preamble lines; otherwise throw `ManualCompactionError('summary')`-equivalent so the host records `compaction/end{error}`. The durable cap (4.3) stops retries.
+- Output validation: non-empty text that opens with a `## ` section after at most 3 short preamble lines, and is smaller than `maxSummaryRatio` × span. A failure counts as an attempt.
+- The finished text is held in memory: `pending[taskId] = { blocks, regionKey, usage }`.
+
+**Phase 2 — commit (fast, at the next step boundary).**
+
+- At the next `pre-step` or `turn-stopping`, if `pending[taskId]` exists and the task's region still resolves to the same `start`, `end` and node list, commit through the adapter with the prepared blocks (5.3 steps 3–7). If the region changed, drop the text and regenerate later.
+
+**Failure accounting.** A failed generation never reaches the compaction engine, so the host would not record it. To keep the cap durable (ADR 0005), the runner records each failed generation as a zero-cost failed attempt: `compactRegion` on the task's region with a `summarize()` that rejects immediately, which makes the host append `compaction/start` + `compaction/end{error}`. The reducer's existing `compaction/end{error}` row then counts it. After `maxDelegateFailures` (3) the task is `failed` and is never retried, across restarts.
+
+**Restart.** A generated-but-uncommitted text is lost on restart and is regenerated (one extra billed call at most per restart per task). Generation never holds the compaction lock, never blocks a step and never holds the user's next message.
 
 ### 5.5 Interaction with host auto compaction
 
@@ -257,8 +275,8 @@ Exact schemas and texts: [04-tools-and-prompt.md](04-tools-and-prompt.md).
 
 ### 6.1 `task_begin({ title })`
 
-- Refuse under PTC (`exec.rootCallId !== undefined`): "call task_begin directly, not from run_code".
-- Assign `id = 'T' + max(state.nextId, reserved[session])`, then bump the in-memory `reserved[session]`. The in-memory reservation only prevents duplicate ids among calls executing concurrently in one batch; the durable id is whatever lands in meta.
+- Refuse nested PTC calls (`exec.callId !== exec.rootCallId`; for direct calls both equal the call's own id — M0 Q1): "call task_begin directly, not from run_code".
+- Assign `id = 'T' + state.nextId`. The native executor runs one message's calls sequentially and commits each result before the next call starts (M0 Q9), so a second `task_begin` in the same batch already sees the first one's id. As a cheap guard against a future concurrent executor, also keep an in-memory per-session high-water mark and use `max(state.nextId, reserved)`.
 - `parent` = innermost id of `stateOf(session).open` at execute time (a begin later in the same batch than another begin does not see it as parent — acceptable: siblings).
 - Returns `{ ok: true, id, title, parent, depth }`; meta `BeginMeta`.
 
@@ -324,7 +342,7 @@ Age is `assistantCount - task.openedAt`, both maintained by the projection in O(
 
 ## 9. Client
 
-- **Dock** (`conversation.input.dock`), hidden by default (`showTaskBar`): the open stack outermost-first with the innermost highlighted, plus "N folding" and the last fold title. Reads only the wire view.
+- **Dock** (`conversation.input.dock` — renders on the home screen and in conversations, unlike `conversation.composer.dock`; M0 Q7), hidden by default (`showTaskBar`): the open stack outermost-first with the innermost highlighted, plus "N folding" and the last fold title. Reads only the wire view.
 - **Settings card** (`plugins.bundle.config`): the `Config` fields below.
 - Locales: `en` required; others optional.
 
@@ -349,7 +367,7 @@ All fields `.volatile()`; readers clamp invalid values to defaults instead of th
 | Engine adapter cannot resolve `dsh-compaction-basic` | Tools still work; tasks close with their verdicts; folds are skipped; one startup diagnostic and a hint-free status line in the dock. Recall of existing folds still works. |
 | `meta` missing on a result (host without `presentationMeta`) | The plugin refuses to activate: `peerDependencies` pin a host that has it. |
 | Model never calls `task_end` | Stale-task hint; host auto compaction remains the safety net. |
-| Model calls task tools from `run_code` | Refused with a clear error. |
+| Model calls task tools from `run_code` (PTC is disabled by default) | Refused with a clear error (`exec.callId !== exec.rootCallId`). |
 | Host restart mid-turn | Projection reloads from checkpoint/log; due tasks fold at the next boundary; nothing in memory is required. |
 | Fork | Inherited prefix replays through `apply`; open tasks continue in the fork. |
 | taskfold installed too | Tool-name collision fails registration; the plugin logs "uninstall dsh-taskfold" and stays inactive. |
@@ -362,5 +380,6 @@ All fields `.volatile()`; readers clamp invalid values to defaults instead of th
 3. For any event sequence, `apply` over the full log equals `apply` resumed from any checkpoint (projection replay equivalence).
 4. A task reaches exactly one terminal verdict, and never leaves it.
 5. No code path on `pre-step` or `turn-stopping` calls `snapshotEvents()` or iterates the log.
-6. No code path issues an LLM call inside `pre-step`.
+6. No code path awaits an LLM call inside `pre-step` or `turn-stopping` (delegate generation may be *started* there as an un-awaited promise).
 7. Recall of a folded task returns exactly `deriveEventMessage` of its `shadowedSeqs`, in order.
+8. Replaying a log in which a task-mark result was later pruned (replaced) yields the same state as replaying it without the prune, apart from cut translation.

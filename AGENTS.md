@@ -15,7 +15,7 @@ Instructions for anyone — human or coding agent — implementing dsh-task-fold
 2. Never parse model-facing text to derive state.
 3. `host/projection.js` and `host/cuts.js` are pure: no `ctx`, no I/O, no `Date.now()`, no randomness.
 4. No code on the `agent/pre-step` or `agent/turn-stopping` path calls `session.snapshotEvents()` or iterates the event log.
-5. No LLM call inside `agent/pre-step`.
+5. Never await an LLM call inside `agent/pre-step` or `agent/turn-stopping`; delegate summaries are generated in an un-awaited background promise (see `docs/adr/0006-background-delegate.md`).
 6. Only `host/engine-adapter.js` may import, resolve or reference `@deepseek-ai/dsh-compaction-basic` internals.
 7. Never wrap or monkey-patch host services (`ctx.llm`, `ctx.compaction`, …).
 8. Never write files to disk at runtime.

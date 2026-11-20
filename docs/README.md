@@ -10,7 +10,8 @@ Read in order the first time; afterwards each document stands on its own.
 | 04 | [Tools and prompt](04-tools-and-prompt.md) | Exact tool schemas, rendered texts, `meta` payloads, the system-prompt section and the token budget |
 | 05 | [Implementation plan](05-implementation-plan.md) | Repository layout, milestones, per-milestone tasks and acceptance criteria |
 | 06 | [Testing and evaluation](06-testing.md) | Unit, property, contract and live tests; the evaluation protocol and metrics |
-| 07 | [Open questions](07-open-questions.md) | Things that must be verified against a live host before or during implementation |
+| 07 | [Open questions](07-open-questions.md) | Assumptions checked against a live host (answers from M0) and those still open |
+| — | [M0 report](../m0/REPORT.md) | Raw evidence from the live-host verification: report, probe log, session journals |
 | — | [Architecture decision records](adr/) | One file per decision, with context, options and consequences |
 
 ## Vocabulary

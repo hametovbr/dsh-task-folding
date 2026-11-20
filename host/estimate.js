@@ -1,6 +1,6 @@
 // Span token estimates with the host's own estimator (ctx.tokenMeter.estimateMessage).
-// A seq's message never changes (a replacement gets a new seq), so per-seq estimates are
-// cached; the cache is bounded so a long-running host does not grow without limit.
+// A seq's message never changes (a replacement gets a new seq), so per-seq estimates are cached
+// per session, in insertion order, and bounded so a long-running host does not grow without limit.
 
 /** @typedef {import('./types.js').Task} Task */
 
@@ -14,6 +14,7 @@
 
 /** @typedef {{ estimateMessage(message: any): number }} TokenMeter */
 
+/** Cached seqs per session; a session is one conversation, so this is a few hours of work. */
 export const CACHE_LIMIT = 20_000
 
 export class SpanEstimator {
@@ -24,8 +25,8 @@ export class SpanEstimator {
   constructor(meter, limit = CACHE_LIMIT) {
     this.meter = meter
     this.limit = limit
-    /** @type {Map<string, number>} */
-    this.cache = new Map()
+    /** @type {WeakMap<object, Map<number, number>>} */
+    this.cache = new WeakMap()
   }
 
   /**
@@ -53,17 +54,21 @@ export class SpanEstimator {
    * @param {number} seq
    */
   node(session, seq) {
-    const key = `${session.id}\u0000${seq}`
-    const hit = this.cache.get(key)
+    // A seq is unique within one session, not across sessions, so the session is the outer key.
+    let cache = this.cache.get(session)
+    const hit = cache === undefined ? undefined : cache.get(seq)
     if (hit !== undefined) return hit
     const event = session.eventAt(seq)
     const message = event ? session.deriveEventMessage(event) : null
     const tokens = message ? safe(this.meter.estimateMessage(message)) : 0
-    if (this.cache.size >= this.limit) {
-      const oldest = this.cache.keys().next().value
-      if (oldest !== undefined) this.cache.delete(oldest)
+    if (cache === undefined) {
+      cache = new Map()
+      this.cache.set(session, cache)
+    } else if (cache.size >= this.limit) {
+      const oldest = cache.keys().next().value
+      if (oldest !== undefined) cache.delete(oldest)
     }
-    this.cache.set(key, tokens)
+    cache.set(seq, tokens)
     return tokens
   }
 

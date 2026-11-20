@@ -96,6 +96,25 @@ export function renderFoldList(rows) {
 export const RECALL_NOT_AVAILABLE =
   'Reading a fold back by task, fold, range or grep is not available in this version; only the list of folds is.'
 
+/**
+ * The node a whole task collapses into (docs/04 §6). The host frames it with its own checkpoint
+ * preamble and `<compacted-summary>` tags; the projection recognises the fold structurally, never
+ * from this text, so the wording here is for the model alone.
+ *
+ * @param {{ id: string, title: string, outcome: string | null }} task
+ * @param {string} summary the model's own summary
+ * @param {{ messages: number, tokens: number }} stats
+ */
+export function renderFoldNode(task, summary, stats) {
+  const outcome = task.outcome === null ? 'done' : task.outcome
+  return [
+    `# ${task.id} · ${task.title}`,
+    summary.trim(),
+    '',
+    `— fold of ${task.id} · ${stats.messages} messages · ~${formatTokens(stats.tokens)} tokens · outcome: ${outcome} · originals: fold_recall({ task: "${task.id}" })`,
+  ].join('\n')
+}
+
 /** @param {number} tokens */
 export function formatTokens(tokens) {
   if (tokens < 1000) return String(Math.max(0, Math.round(tokens)))

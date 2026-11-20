@@ -26,8 +26,23 @@ function fakeContext(options = {}) {
   const logs = []
   const state = initialState()
 
+  /** @type {{ event: string, handler: any }[]} */
+  const listeners = []
   const ctx = {
     tokenMeter: { estimateMessage: () => 100 },
+    /** @param {string} event @param {any} handler */
+    on(event, handler) {
+      listeners.push({ event, handler })
+      return () => {}
+    },
+    /** @param {...any} _args */
+    waterfall(..._args) {
+      return false
+    },
+    /** @param {string} _name */
+    get(_name) {
+      return undefined
+    },
     tools: {
       /** @param {any} definition */
       register(definition) {
@@ -63,7 +78,7 @@ function fakeContext(options = {}) {
       },
     },
   }
-  return { ctx, tools, sections, projections, logs, state }
+  return { ctx, tools, sections, projections, logs, state, listeners }
 }
 
 test('the plugin declares its name, services and prompt order', () => {
@@ -96,7 +111,10 @@ test('apply registers the three tools, the projection and the prompt section', a
   assert.doesNotThrow(() => projection.wire.viewSchema.parse(projection.wire.view(fake.state)))
 
   assert.deepEqual(fake.sections, [{ name: 'task-folding', order: PROMPT_ORDER, text: PROMPT_SECTION }])
-  assert.deepEqual(fake.logs, [])
+  assert.deepEqual(
+    fake.listeners.map((listener) => listener.event),
+    ['agent/pre-step', 'agent/turn-stopping'],
+  )
 })
 
 test('the registered tools read state through the projection handle', async () => {

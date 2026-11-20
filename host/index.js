@@ -1,7 +1,9 @@
-// The plugin object (docs/02-host-api.md §1). It registers the projection, the three tools and
-// the prompt section, and does nothing else: no hooks, no folds — those arrive in M3.
+// The plugin object (docs/02-host-api.md §1). It registers the projection, the three tools, the
+// prompt section and the two fold boundaries (docs/03 §5).
 
+import { createFoldEngine } from './engine-adapter.js'
 import { SpanEstimator } from './estimate.js'
+import { createFoldRunner } from './fold-runner.js'
 import {
   PROJECTION_KEY,
   STATE_VERSION,
@@ -18,6 +20,8 @@ import { createTools } from './tools.js'
 
 export const PLUGIN_NAME = 'dsh-task-folding'
 export const PROMPT_ORDER = 650
+/** Said once when the compaction engine cannot be built (03 §11). */
+export const ENGINE_UNAVAILABLE = 'the compaction engine is unavailable, so folds are off.'
 
 /** The host's schema builder, or null when it cannot be resolved (the plugin then runs with defaults). */
 const schemastery = await loadSchemastery()
@@ -79,6 +83,37 @@ const plugin = {
     })
 
     ctx.systemPrompt.section({ name: 'task-folding', order: PROMPT_ORDER, text: texts.PROMPT_SECTION })
+
+    // The engine is built once, in the background, so the first boundary that folds does not pay
+    // for the module resolution. A null engine keeps the plugin working without folds (§11).
+    const engine = createFoldEngine(ctx)
+    engine.then(
+      (resolved) => {
+        if (resolved === null)
+          ctx.logger.warn(
+            `${PLUGIN_NAME}: ${ENGINE_UNAVAILABLE} Tasks still open and close; folds are skipped.`,
+          )
+      },
+      (/** @type {unknown} */ error) => {
+        ctx.logger.warn(`${PLUGIN_NAME}: ${ENGINE_UNAVAILABLE} ${reason(error)}`)
+      },
+    )
+
+    const runner = createFoldRunner({
+      async stateOf(session) {
+        if (projection.handle === undefined) throw new Error(texts.ERR_UNAVAILABLE)
+        return (await projection.handle).stateOf(session)
+      },
+      engine: () => engine,
+      estimator: new SpanEstimator(ctx.tokenMeter),
+      logger: ctx.logger,
+    })
+    /** @param {any} payload @param {() => Promise<any>} next */
+    const onPreStep = (payload, next) => runner.preStep(payload, next)
+    /** @param {any} payload */
+    const onTurnStopping = (payload) => runner.turnStopping(payload)
+    ctx.on('agent/pre-step', onPreStep)
+    ctx.on('agent/turn-stopping', onTurnStopping)
   },
 }
 

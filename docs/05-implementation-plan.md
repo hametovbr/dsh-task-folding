@@ -12,7 +12,7 @@ The plan is ordered so that every milestone ends with something testable, and th
 | Property tests | `fast-check` (devDependency only) | Invariants 1–4 in [03 §12](03-architecture.md#12-invariants-tested). |
 | Lint/format | `eslint` + `prettier` (devDependencies) | — |
 | Packaging | One npm package, one Loader row, Host `apply` + Client module in the same package | Matches the official template; confirmed live in M0. |
-| Peer dependencies | `@deepseek-ai/dsh`, `@deepseek-ai/dsh-compaction-basic`, `@deepseek-ai/dsh-llm`, all `^0.2.2-rc.1` | Hosts with `tool/result.meta` and `agent/turn-stopping`. Live-verified on 0.2.2-rc.5 only; whether `dsh plugin add` links peers is unverified ([07 Q4](07-open-questions.md#q4)). |
+| Peer dependencies | `@deepseek-ai/dsh`, `@deepseek-ai/dsh-compaction`, `@deepseek-ai/dsh-compaction-basic`, `@deepseek-ai/dsh-llm`, all `^0.2.2-rc.1` | Hosts with `tool/result.meta` and `agent/turn-stopping`. Live-verified on 0.2.2-rc.5 only; `dsh plugin add` does not link peers ([07 Q4](07-open-questions.md#q4)). |
 | Language of all texts | English (code, comments, docs, model-facing text). Locale files: `en` required. | Project rule. |
 
 ## 2. Repository layout
@@ -107,7 +107,9 @@ Tasks:
 
 Acceptance: installed in a local profile; a scripted session opens and closes nested tasks, including a relay in one message; the log carries the expected meta; the projection state after restart equals the state before.
 
-### M3 — Self-summary folding
+### M3 — Self-summary folding — **done 2026-11-21**
+
+Result: `host/engine-adapter.js` (the only module that knows `BasicCompactionEngine`; the subclass is built on a shim context with a no-op `reflect.provide`, so the realm's `ctx.compaction` survives — recorded in 02 §6 and ADR 0004), `host/fold-runner.js` (pre-step and turn-stopping boundaries: in-flight guard, inner-first order, region and pairing checks, size pre-check, busy/demote/backoff), `renderFoldNode`, the wiring in `index.js`, and `scripts/contract-check.js` (`npm run contract`). 34 new tests (134 total), including the 80k-event performance guards and four live journals (`test/fixtures/logs/m3-*.jsonl`). Live: a closed task folded at the next step boundary with the model's own summary (no LLM call, `llmStreamCall` absent), the model answered a follow-up from the checkpoint alone, nested tasks folded inner-first with a relay, and the realm's own checkpoint committed in the same process afterwards. Deviations: fold errors are not wrapped on this path (the shrink refusal is a plain `Error`, classified by message), the runner re-reads the task after every committed fold, and `@deepseek-ai/dsh-compaction` joined the peers. Details: [`m3/REPORT.md`](../m3/REPORT.md).
 
 Goal: folds happen, fast, at the right boundaries.
 

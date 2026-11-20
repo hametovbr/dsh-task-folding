@@ -243,9 +243,11 @@ Runs inline in `agent/pre-step` (before `next()`) and in `agent/turn-stopping`, 
 2. Build the node text (7.3).
 3. Call the adapter: `engine.compactRegion(start, end, agent, signal)` on the adapter engine whose `summarize()` returns the prepared blocks without an LLM call ([ADR 0004](adr/0004-engine-adapter.md)).
 4. On success: nothing else to do — the projection observes the replacement and marks `folded`.
-5. On `ManualCompactionError('busy')`: retry at the next boundary (no cost).
-6. On `ManualCompactionError('summary')` (summary not smaller than the span — validation in `task_end` should prevent it): switch the task to the delegate path in memory for this process.
+5. On a busy lock (`ManualCompactionError` code `busy`): stop this pass and retry at the next boundary (no cost, no log).
+6. On the host's shrink refusal (a plain `Error` whose message starts with "summary is not smaller than the shadowed content" — this entry path does not wrap errors, `docs/02` §6): mark the task unfoldable for this process and skip it. The size pre-check in the runner should make this rare.
 7. On any other error: log once per task, retry at the next boundary with in-memory backoff (1, 2, 4, 8 boundaries). Self folds are free, so there is no durable cap.
+
+The runner re-reads the task from the projection after every committed fold: the fold of an inner task moves the outer task's cuts, and a stale `Task` object would resolve to a region whose boundary is no longer on the surface.
 
 ### 5.4 Delegate fold (fallback path)
 

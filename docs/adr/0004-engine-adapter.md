@@ -23,3 +23,21 @@ Option 1 now, isolated in `host/engine-adapter.js`, with option 4 proposed upstr
 - A CI contract check downloads the published host package versions in the supported range and verifies the adapter's assumptions (exports, `summarize` dispatch, `compactRegion` signature, constructor injections), replacing taskfold's hand-maintained "27/27 APIs present" table.
 - If resolution fails at runtime, the plugin keeps working without folds and says so once.
 - When the upstream API lands, the adapter is deleted and the plugin moves to `inject: ['compaction']`.
+
+## Construction
+
+Verified live in M3 (0.2.2-rc.5). The subclass is constructed on a **shim context** — a plain
+object with a no-op `reflect.provide`, a forwarding `waterfall`, and the real `tokenMeter`,
+`logger` and `get`. `Service`'s constructor provides the instance under `compaction` through
+`ctx.reflect.provide`, so a shim is the smallest way to keep the realm's engine intact: the
+alternative candidates were rejected — passing the real context replaces or collides with the
+realm's service, and Cordis offers no per-name isolation for a service a plugin provides itself.
+
+The shim intentionally lacks `on` and `effect`; `{ auto: false }` guarantees the constructor
+does not call them, and their absence turns a future change in that assumption into a loud
+failure instead of a silently hook-less automatic compaction. After a fold, the realm's own
+`ctx.compaction` was proved alive by compacting a range through it in the same host
+(`m3/REPORT.md`, `test/fixtures/logs/m3-realm-compaction.jsonl`).
+
+There is no `ManualCompactionError('summary')` on this entry path: the shrink refusal is a plain
+`Error` with a fixed message, which the adapter classifies (`docs/02-host-api.md` §6).

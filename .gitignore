@@ -6,3 +6,4 @@ coverage/
 test/fixtures/logs/*.raw.jsonl
 .tmp/
 .m2-scratch/
+.m3-scratch/

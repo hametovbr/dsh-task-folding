@@ -136,6 +136,32 @@ Internal (`BasicCompactionEngine`):
 
 There is no public way to pass a ready-made summary or a custom instruction to `ctx.compaction.compactRegion`. See [ADR 0004](adr/0004-engine-adapter.md).
 
+### Construction of a plugin-owned engine (M3 spike, live on 0.2.2-rc.5)
+
+`new BasicCompactionEngine(shim, { auto: false })` works when `shim` is a plain object that
+provides exactly what the constructor and the transaction read:
+
+| Member | Why | Evidence |
+|---|---|---|
+| `reflect.provide(name, value)` → no-op | `Service`'s constructor registers the instance as `compaction` through this call; a no-op keeps the realm's service untouched | `packages/cordis/src/service.ts` L42–L58; live: `ctx.compaction` still the realm's `BasicCompactionEngine` afterwards |
+| `tokenMeter` | `compactSurfaceRegion` prices the span and the framed summary with it | `region.ts` `prepareCompaction`, `summarizeCompaction` |
+| `waterfall` | `recover()` dispatches `compaction/summary-error` | `index.ts` `regionDependencies()` |
+| `logger` | diagnostics during the transaction | `region.ts` |
+| `get` | optional sibling services during automatic compaction (unused with `auto: false`) | `index.ts` ~L303 |
+
+`on`/`effect` are deliberately **not** provided: with `auto: false` the constructor registers
+nothing, so a call to either would be a bug worth failing on. `{ auto: false }` is required —
+with `auto: true` the constructor registers pressure hooks on the shim instead of the realm,
+which would silently disable automatic compaction.
+
+`compactRegion` on a real session works unchanged against such an instance: it appends
+`compaction/start` → `compaction/summary` (provider/model from our prepared route, no
+`llmStreamCall`, no `usage`) → the replacement `user/message` → `compaction/end`. Errors are
+**not** wrapped in `ManualCompactionError` for this entry point — only `busy` arrives that way
+(`assertCompactionInactive`); the shrink refusal is a plain `Error` whose message starts with
+`summary is not smaller than the shadowed content` (`region.ts` ~L415–L422). The adapter
+classifies on that text, and `scripts/contract-check.js` pins it in CI.
+
 ## 7. LLM and token meter (public)
 
 - `ctx.llm.stream(options: GenerateOptions)` — async iterable of `StreamChunk`; `BlockAssembler` from `@deepseek-ai/dsh-llm` assembles blocks, usage and finish. Used by the delegate path only.

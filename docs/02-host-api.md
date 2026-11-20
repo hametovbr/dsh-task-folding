@@ -36,6 +36,7 @@ type SessionEvent = {
 - `session.snapshotEvents()` — O(n) copy of the log. **The plugin MUST NOT call it on a per-step path.**
 - `session.toolHistory()` — passed by the stock summarizer in `GenerateOptions`; the delegate path must pass it too.
 - Custom event types are refused on reopen unless `ignorable: true`, which live `append()` cannot set. **The plugin MUST NOT append events.**
+- Session repair (`packages/core/session/src/repair.ts`, `openTurnClosers`): an open tail turn is closed with synthetic **error** `tool/result`s for every unanswered call, then `step/end` and `turn/end`. The same closers seed a fork cut inside an open turn.
 
 ### Relevant event shapes
 

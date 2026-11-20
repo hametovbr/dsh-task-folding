@@ -16,7 +16,7 @@
 
 ### 2.1 Event DSL
 
-A small builder that emits host-shaped events with increasing seqs:
+`test/fixtures/sim.js` emits host-shaped events with increasing seqs, keeps the surface the way the host does, feeds every event to the projection, and emulates the task tools' meta at execution time. `test/fixtures/ops.js` holds the random-program operations and the invariant checks. An interrupted step is modeled as the host's session repair leaves it: synthetic error results for unanswered calls, then `step/end`. The original sketch:
 
 ```js
 const s = session()

@@ -120,78 +120,77 @@ The summary text itself is NOT copied into meta: it already lives in the `task_e
 
 ### 4.2 Projection state
 
-Key `taskFolding`, `stateVersion: 1`, host-only fields plus a wire view.
+Key `taskFolding`, `stateVersion: 1`. The authoritative typedefs are in `host/types.js`; this is a summary.
 
 ```ts
 type State = {
-  nextId: number                         // highest numeric id seen + 1
-  open: string[]                         // stack, outermost first
+  nextId: number                   // highest numeric id seen + 1
+  open: string[]                   // stack, outermost first
   tasks: Record<string, Task>
-  batch: Batch | null                    // the in-flight batch IF it carries one of our calls
-  lastAssistantSeq: number               // gate for "fold is due"
-  assistantCount: number                 // running count of assistant/message events (task age)
-  folds: FoldRow[]                       // every compaction/summary in log order (recall index)
-  pendingSummary: PendingSummary | null  // compaction/summary seen, replacement not yet
-  hint: { key: string } | null           // durable latch for the stale-task hint
-  lastHeaderSeq: number                  // latest request/header (tools + config for delegate requests)
-  failuresSince: Record<string, number>  // delegate tasks → compaction/end{error} count since queued
+  order: string[]                  // task ids in creation order
+  batch: Batch | null              // the in-flight batch IF it carries one of our calls
+  assistantCount: number           // running count of assistant/message events (task age)
+  folds: FoldRow[]                 // every compaction/summary in log order (recall index)
+  pendingSummary: number | null    // index of a FoldRow whose replacement has not arrived yet
+  hintKey: string | null           // durable latch for the stale-task hint
+  lastHeaderSeq: number | null     // latest request/header (tools + config for delegate requests)
 }
 
 type Task = {
   id: string; title: string; parent: string | null; depth: number
-  status: 'opening' | 'open' | 'closing' | Verdict
-  beginCut: number | null                // the seq s of after(s); null while opening; -1 = absorbed
-  endCut: number | null                  // same encoding
-  endMsgSeq: number | null; endCallId: string | null
-  openedAt: number                       // assistantCount when the begin batch closed
-  outcome?: 'done' | 'failed' | 'abandoned'
-  estTokens?: number
-  foldIndex?: number                     // index into folds when folded
+  status: 'opening' | 'open' | 'closing' | 'queued' | 'delegate'
+        | 'below-floor' | 'merged' | 'folded' | 'absorbed' | 'failed'
+  beginCut: number | null          // last node of the begin batch; null until it closes; -1 = absorbed
+  spanStart: number | null         // first surface node after the begin batch; same encoding
+  endCut: number | null            // last node of the end batch; same encoding
+  endMsgSeq: number | null; endCallId: string | null   // where the summary argument lives
+  verdict: EndVerdict | null       // from task_end meta; applied when the end batch closes
+  outcome: Outcome | null; estTokens: number; summaryChars: number
+  openedAt: number                 // assistantCount when the begin batch closed
+  reported: boolean                // an assistant/message arrived after the end batch closed
+  failures: number                 // compaction failures seen while waiting as 'delegate'
+  foldIndex: number | null         // index into folds once folded
 }
 
-type Batch = {
-  msgSeq: number
-  waiting: string[]                      // call ids without a result yet
-  last: number                           // seq of the last node of the batch so far
-  begins: string[]; ends: string[]       // task ids whose meta arrived in this batch
-}
+type Batch = { msgSeq: number; waiting: string[]; last: number; begins: string[]; ends: string[] }
 
 type FoldRow = {
-  summarySeq: number                     // the compaction/summary event (has shadowedSeqs)
-  nodeSeq: number | null                 // the replacement user/message
-  taskId: string | null                  // ours, or null for auto/other compactions
-  title: string | null
+  summarySeq: number               // the compaction/summary event (has shadowedSeqs)
+  nodeSeq: number | null           // the replacement user/message
+  taskId: string | null            // set when the replacement covers exactly a waiting task's span
   shadowedCount: number; shadowedTokens: number
 }
-
-type PendingSummary = { summarySeq: number; taskId: string | null; shadowedCount: number; shadowedTokens: number; title: string | null }
 ```
 
-Size: `folds` grows by one row per compaction (tens per long session); `tasks` by one row per task. Terminal tasks MAY be compacted to `{id, title, status, foldIndex}` once terminal to keep checkpoints small.
+`spanStart` is tracked explicitly so that a fold can be recognized structurally: a replacement whose `surfaceOp.startSeq === spanStart` and `surfaceOp.endSeq === endCut` is that task's fold, whoever committed it. This keeps the reducer away from summary text (AGENTS.md rule 2).
+
+Size: `folds` grows by one row per compaction (tens per long session); `tasks` by one row per task. Terminal tasks MAY later be compacted to `{id, title, status, foldIndex}` to keep checkpoints small.
 
 ### 4.3 Reducer
 
-`apply(state, event)` — pure, synchronous, returns the same reference when nothing changes.
+`apply(state, event)` — pure, synchronous, returns the same reference when nothing changes. Implementation: `host/projection.js`.
 
 | Event | Transition |
 |---|---|
-| `assistant/message` | `lastAssistantSeq = seq`, `assistantCount += 1`. If `batch` is set and still waiting, force-close it first (interrupted batch; its `last` stays as seen). If the message carries a call named `task_begin` or `task_end`, open `batch = { msgSeq: seq, waiting: [all call ids], last: seq, begins: [], ends: [] }`; otherwise `batch = null`. |
-| `tool/result` with `surfaceOp === 'append'` | If `batch` and the result's `toolCallId ∈ waiting`: remove it, `last = seq`. If `data.meta?.tf === 1`: on `begin` create the task (`status: 'opening'`), push onto `open`, add to `begins`, `nextId = max(nextId, n+1)`; on `end` set `status: 'closing'`, pop it and its `merged` descendants from `open`, store `endMsgSeq = batch.msgSeq`, `endCallId`, verdict fields, add to `ends`. When `waiting` becomes empty, **close the batch**. |
-| `step/end` | If `batch` is set, close it (a step ends only after all its results; this is the normal close path when a call result is missing). |
-| batch close (internal) | For each id in `begins`: `beginCut = last`, `openedAt = assistantCount`, `status: 'open'`. For each id in `ends`: `endCut = last`, `status = verdict`; for `merged` ids: `status: 'merged'`. `batch = null`. |
-| `compaction/summary` | Push a `FoldRow` (with `nodeSeq: null`); set `pendingSummary`. `taskId` is parsed from the first summary line if it matches the fold heading `# <id> · …` (see 7.3); otherwise null. |
-| surface event with `surfaceOp.op === 'replace'` | Let `S = set(sourceEventSeqs)`, `end = surfaceOp.endSeq`, `R = seq`. If `pendingSummary` is set, fill `nodeSeq = R` in its row and clear it. If the row's `taskId` names a `queued`/`delegate` task whose `endCut === end` and whose `beginCut ∉ S` → `status: 'folded'`, `foldIndex`. Then translate every tracked cut of every non-terminal task and every open task (2.4); a `queued`/`delegate` task whose cut becomes absorbed → `status: 'absorbed'`; an open task whose `beginCut` is absorbed keeps running with `beginCut = -1` and is closed `absorbed` by its `task_end`. |
-| `compaction/end` with `data.error` | For every task in `delegate` status: `failuresSince[id] += 1`; when it reaches `maxDelegateFailures` (constant, 3) → `status: 'failed'`. |
-| `user/message` with `data.source.kind === 'task-folding:hint'` | `hint = { key: data.source.key }`. (`user/message` data is the message itself.) |
-| `request/header` | `lastHeaderSeq = seq` (pointer for the delegate request's tools and config, 5.4). |
-| anything else | unchanged |
+| any surface event with `surfaceOp.op === 'replace'` | Handled by the replace row below and nothing else (in particular, its `meta` is never read). |
+| `assistant/message` | Force-close an in-flight batch (interrupted). Note a surface append (below). `assistantCount += 1`; mark every waiting task `reported`. If the message carries a call named `task_begin` or `task_end`, open `batch = { msgSeq: seq, waiting: [all call ids], last: seq, begins: [], ends: [] }`. |
+| `tool/result` (append) | Note a surface append. If the result answers a call in `batch.waiting`: remove it, `last = seq`, and read `data.meta` if it has `tf: 1`: `begin` creates the task (`status: 'opening'`, pushed onto `open`, added to `begins`, `nextId = max(nextId, n + 1)`); `end` sets the target and its open `merged` descendants to `closing`, removes them from `open`, stores `endMsgSeq`, `endCallId`, verdict fields, adds them to `ends`. When `waiting` becomes empty, close the batch. Meta on a result outside the batch, malformed meta, a duplicate id, or an end for a task that is not open is ignored. |
+| `user/message`, `system/message` (append) | Note a surface append. A `user/message` with `data.source.kind === 'task-folding:hint'` sets `hintKey = data.source.key`. (`user/message` data is the message itself.) |
+| surface append (internal) | Every `open` task with `spanStart === null` gets `spanStart = seq`. |
+| `step/end` | Close an in-flight batch. |
+| batch close (internal) | `begins`: `beginCut = last`, `openedAt = assistantCount`, `opening → open`. `ends`: `endCut = last`, then the status: merged descendants (no verdict) → `merged`; meta verdict `below-floor`/`absorbed` → that; begin cut absorbed → `absorbed`; no span (`spanStart === null`, i.e. begun and ended in one batch) → `below-floor`; otherwise the meta verdict (`queued` or `delegate`). |
+| `compaction/summary` | Push a `FoldRow` (`nodeSeq: null`, `taskId: null`); `pendingSummary = its index`. |
+| replace (`surfaceOp.op === 'replace'`) | `S = set(sourceEventSeqs)`. If the event is a `user/message` and a fold row is pending, this is its node. For each non-terminal task: if the row is pending, the task is waiting, and `startSeq === spanStart && endSeq === endCut` → `folded` (row gets `taskId`, `nodeSeq`). Otherwise translate `beginCut`/`endCut` (2.4, "after") and `spanStart` ("first": survives only if the range starts exactly at it); a waiting task with any boundary absorbed → `absorbed`; an open task keeps running and closes `absorbed`. |
+| `compaction/end` with `data.error` | Every `delegate` task: `failures += 1`; at `MAX_DELEGATE_FAILURES` (3) → `failed`. |
+| `request/header` | `lastHeaderSeq = seq`. |
+| anything else | unchanged (same reference) |
 
 Notes:
 
-- **Replacement `tool/result`s MUST NOT be read for `meta`.** The tool-result pruner's replacement keeps the original result's `meta` (observed in M0), so reading it would re-apply a `begin`/`end`. Replacements are handled only by the replace row.
+- **Replacement `tool/result`s MUST NOT be read for `meta`.** The tool-result pruner's replacement keeps the original result's `meta` (observed in M0), so reading it would re-apply a `begin`/`end`.
 - `tool/ptc-dispatch` events are ignored: task tools refuse nested calls (6.1), so no task `meta` can appear there.
-- Results of one batch arrive in call order, one after another (the native executor is sequential, M0 Q9); the reducer does not depend on that order.
-- Force-closing an interrupted batch is safe: the host's session repair appends synthetic error results for unanswered calls, so in practice the batch completes normally; the force-close only guards odd logs.
+- Results of one batch arrive in call order (the native executor is sequential, M0 Q9); the reducer does not depend on that order.
+- An interrupted step is closed by the host's session repair with synthetic error results for unanswered calls, then `step/end` (`openTurnClosers`, `packages/core/session/src/repair.ts`); the batch therefore completes normally. Force-closing on the next `assistant/message` only guards odd logs.
 - A fold that commits while a batch is in flight cannot happen: commits run only at step boundaries (`pre-step`, `turn-stopping`), never between a call and its result.
 - Counting every `compaction/end{error}` against every `delegate` task over-counts when unrelated compactions fail. That bias is deliberate: it can only stop retries earlier, never re-bill forever ([ADR 0005](adr/0005-durable-state-only.md)).
 
@@ -211,20 +210,26 @@ type View = {
 
 ### 5.1 When a task is due
 
-A `queued` or `delegate` task is **due** when `lastAssistantSeq > endCut` (the model has produced at least one message after the closing batch — usually the report, written with the span still in context), or when the turn is stopping. Due tasks are processed inner-first: by `depth` descending, then by `endCut` ascending (close order).
+A `queued` or `delegate` task is **due** when it is `reported` (the model has produced at least one message after the closing batch — usually the report, written with the span still in context), or when the turn is stopping. Seq comparisons are not used: cut translation can move a cut to a later seq. Due tasks are processed inner-first: by `depth` descending, then by `endCut` ascending (close order).
 
 ### 5.2 Region resolution (`planner.js`)
 
+The region is `spanStart..endCut`. The planner checks it against the current surface and refuses anything inconsistent:
+
 ```js
 function resolveRegion(task, nodes) {
-  if (task.beginCut === -1 || task.endCut === -1) return { kind: 'absorbed' }
-  const i = nodes.indexOf(task.beginCut)   // the begin batch's last node
-  const j = nodes.indexOf(task.endCut)     // the end batch's last node
-  if (i === -1 || j === -1) return { kind: 'absorbed' }   // should be impossible after translation
-  if (i + 1 > j) return { kind: 'empty' }                 // nothing between the cuts
-  return { kind: 'fold', start: nodes[i + 1], end: nodes[j] }
+  if (any boundary === ABSORBED) return { kind: 'absorbed' }
+  if (beginCut === null || endCut === null) return { kind: 'inconsistent', reason: 'cuts not set' }
+  if (spanStart === null) return { kind: 'empty' }
+  const b = nodes.indexOf(beginCut), i = nodes.indexOf(spanStart), j = nodes.indexOf(endCut)
+  if (b === -1 || i === -1 || j === -1) return { kind: 'inconsistent', … }
+  if (i !== b + 1) return { kind: 'inconsistent', reason: 'span does not start after its begin cut' }
+  if (i > j) return { kind: 'empty' }
+  return { kind: 'fold', start: spanStart, end: endCut, startIndex: i, endIndex: j }
 }
 ```
+
+`inconsistent` is a bug signal (never produced by the property tests); the runner logs it once and skips the task for the process.
 
 Before committing, the runner MUST check `toolPairingBalancedBefore(session, start)` and `toolPairingBalancedAfter(session, end)` when the helpers are resolvable; a failure is a bug (cuts are balanced by construction), reported once and the task marked unfoldable in memory for this process.
 
@@ -327,7 +332,7 @@ The host frames every summary with its checkpoint preamble and `<compacted-summa
 — fold of T7 · 42 messages · ~18.4k tokens · outcome: done · originals: fold_recall({ task: "T7" })
 ```
 
-The first line is the machine-readable heading the projection parses (`/^# (T\d+) · /`). Task titles are single-line by normalization, so the heading cannot be spoofed by summary content.
+The heading is for the model only. The projection recognizes a fold structurally (4.2), never by its text.
 
 ## 8. Hints
 

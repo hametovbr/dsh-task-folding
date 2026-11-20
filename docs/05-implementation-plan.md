@@ -69,7 +69,9 @@ Tasks:
 
 Acceptance: every open question in [07](07-open-questions.md) touched here has a recorded answer, and the design docs are updated where an answer differs from the assumption.
 
-### M1 — Pure core
+### M1 — Pure core — **done 2026-11-20**
+
+Result: `host/projection.js`, `host/cuts.js`, `host/planner.js`, `host/types.js`; fixtures `test/fixtures/{sim,ops,journals}.js`; 53 tests. Branch/line/function coverage of `projection.js` and `cuts.js` is 100% (`npm run coverage`, enforced in CI); 1,000 property cases run in ~0.4 s. Deviation from the original design, reflected in 03: a fold is recognized structurally by its exact span (`spanStart`, `endCut`), not by parsing the summary heading.
 
 Goal: the projection, cut translation and planner, fully tested offline.
 

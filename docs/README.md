@@ -11,6 +11,7 @@ Read in order the first time; afterwards each document stands on its own.
 | 05 | [Implementation plan](05-implementation-plan.md) | Repository layout, milestones, per-milestone tasks and acceptance criteria |
 | 06 | [Testing and evaluation](06-testing.md) | Unit, property, contract and live tests; the evaluation protocol and metrics |
 | 07 | [Open questions](07-open-questions.md) | Assumptions checked against a live host (answers from M0) and those still open |
+| 08 | [Follow-ups and work order](08-followups.md) | Defects and debt found in M0–M3, the repairs to do before M4, and the order of the remaining milestones |
 | — | [M0 report](../m0/REPORT.md) | Raw evidence from the live-host verification: report, probe log, session journals |
 | — | [Architecture decision records](adr/) | One file per decision, with context, options and consequences |
 

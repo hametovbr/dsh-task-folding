@@ -50,7 +50,9 @@ docs/
 
 ## 3. Milestones
 
-Each milestone lists tasks, then the acceptance criteria that close it.
+Each milestone lists tasks, then the acceptance criteria that close it. What to do *first* — the
+repairs found while building M0–M3 and the decisions that are not milestones yet — lives in
+[08-followups.md](08-followups.md); its §1 is expected to be finished before M4 starts.
 
 ### M0 — Host verification spike (no plugin code) — **done 2026-11-20**
 

@@ -7,7 +7,7 @@ Each question names the assumption, why it matters, and how it was (or will be) 
 | [Q1](#q1) | PTC calls | Answered — assumption corrected |
 | [Q2](#q2) | `meta` durability | Answered — confirmed |
 | [Q3](#q3) | Idle scheduling | Answered — confirmed; design changed (ADR 0006) |
-| [Q4](#q4) | Module resolution | Partly answered — layout-dependent; peers unverified |
+| [Q4](#q4) | Module resolution | Answered — layout-dependent; peers are not linked (M2) |
 | [Q5](#q5) | Checkpoint framing | Open (M7) |
 | [Q6](#q6) | Deferred `fold_recall` | Open (M7) |
 | [Q7](#q7) | Loader row, dock slot | Answered — confirmed |
@@ -15,7 +15,8 @@ Each question names the assumption, why it matters, and how it was (or will be) 
 | [Q9](#q9) | Concurrency in a batch | Answered — refuted (sequential) |
 | [Q10](#q10) | Implicit per-turn task | Open (after M7) |
 | [Q11](#q11) | Recording a failed delegate generation | Answered from source; confirm live in M5 |
-| [Q12](#q12) | Source of `system`/`tools` for delegate requests | Partly answered |
+| [Q12](#q12) | Source of `system`/`tools` for delegate requests | Partly answered (M5) |
+| [Q13](#q13) | Collapsing an `outer` task after its children folded | Open (M7) |
 
 <a id="q1"></a>
 ## Q1 — PTC (`run_code`) calls
@@ -96,3 +97,15 @@ Each question names the assumption, why it matters, and how it was (or will be) 
 
 **Answer (partial, M0 journals):** the system prompt is in history (`request/context.systemPromptUpdate: "in-history"`, a `system/message` surface node), and `request/header.data.header` carries `tools` and `config` (`provider`, `model`, `maxTokens`, `reasoningEffort`). A request built from the surface prefix plus the latest header's `tools` should match the main request's prefix.
 **Still open:** confirm the provider cache hit ratio for such a request (M5, `scripts/verify-cache.js`), and whether `GenerateOptions` needs any header field beyond `tools` and `config` to keep the prefix identical.
+
+<a id="q13"></a>
+## Q13 — Collapsing a span made only of fold nodes
+
+**Observed (M3):** after an inner task and its sibling folded, the outer task's remaining span held
+only their two summary nodes and its own closing batch — 1,859 tokens — so the economy rule
+(`estTokens − summaryTokens ≥ minSpanTokens`, 03 §6.2) made it `below-floor`. That is consistent with
+the design, but it means a three-level session leaves the outer task unfolded while its children are
+folded.
+**Open:** whether to collapse such a span anyway (it saves little context but flattens the tree), or to
+lower the floor for a span that consists only of fold nodes.
+**Settle:** M7, with the evaluation data ([08](08-followups.md) Q13).

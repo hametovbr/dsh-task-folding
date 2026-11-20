@@ -2,7 +2,7 @@
 
 A plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH): the agent wraps its work in named tasks, and every finished task is folded into a short summary. The original messages stay in the session log and can be brought back on demand with `fold_recall`.
 
-> **Status:** design verified on a live host (milestone M0, DSH 0.2.2-rc.5 — see [m0/REPORT.md](m0/REPORT.md)). No plugin code yet; next is M1, the pure core.
+> **Status:** milestones M0–M3 are done on DSH 0.2.2-rc.5: the plugin installs, opens and closes tasks, and folds a finished task into the summary the model wrote (no LLM call), with the originals kept in the log. Recall is next (M4); see [docs/08-followups.md](docs/08-followups.md) for what comes after and what is still broken.
 
 ## Why another plugin
 

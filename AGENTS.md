@@ -27,12 +27,13 @@ Instructions for anyone — human or coding agent — implementing dsh-task-fold
 - Small pure functions; comments explain *why*, not history. Bug history belongs in commit messages, not in comments.
 - No runtime dependencies. Dev dependencies are fine.
 
-## Commands (once M1 adds `package.json`)
+## Commands
 
 ```sh
 npm test            # node:test, all unit/property/replay/component tests
+npm run coverage    # tests + 100% coverage gate for host/projection.js and host/cuts.js
 npm run typecheck   # tsc --noEmit --checkJs
-npm run lint
+npm run lint        # eslint + prettier --check
 ```
 
 ## Commits

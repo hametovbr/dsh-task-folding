@@ -54,7 +54,7 @@ Each milestone lists tasks, then the acceptance criteria that close it.
 
 ### M0 — Host verification spike (no plugin code)
 
-Goal: answer the open questions that could change the design before writing it. Needs a machine with DSH installed and an API key.
+Goal: answer the open questions that could change the design before writing it. Needs a machine with DSH installed and an API key. Ready-to-run instructions for an on-host agent, including the probe bundle and the report format: [`m0/AGENT_PROMPT.md`](../m0/AGENT_PROMPT.md).
 
 Tasks:
 

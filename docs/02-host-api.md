@@ -13,7 +13,7 @@ Source: `packages/preset/agent-preset/skills/dsh-doc/references/host-plugin.md`,
 - `inject` lists required services; optional services go through `ctx.inject([...], fn)` so the plugin stays inactive rather than throwing.
 - Every registration is an effect on the owning context (`ctx.effect`, `ctx.on`, service `register` calls return disposers).
 - Display metadata: `locale/<lang>.json` with `meta.title` / `meta.description`, an icon export, both listed in `files`.
-- Peer version gating: DSH ≥ 0.2.0 checks `peerDependencies` at install and startup with `semver.satisfies(…, { includePrerelease: true })`.
+- Peer version gating: DSH ≥ 0.2.0 checks `peerDependencies` at install and startup with `semver.satisfies(…, { includePrerelease: true })`. Only peers named `@deepseek-ai/dsh` or `@deepseek-ai/dsh-*` are checked, an own `engines.dsh` range decides alone, and `peerDependenciesMeta` is ignored (`packages/app-boot/src/plugin-compatibility.ts`, `unmetRequirements`). **[live]** The check compares the installed **runtime** version, not the peer's own installed version.
 
 ## 2. Session log and surface (public)
 
@@ -92,6 +92,9 @@ interface ToolDefinition extends ToolSchema {        // name, description, param
 - **[live] PTC.** `tool-executor-ptc` ships `disabled: true`; only one executor may be registered per scope, so enabling PTC means disabling the native executor. A nested call produces no `tool/result`; it is recorded as `tool/ptc-dispatch-start` + `tool/ptc-dispatch`, and its `presentationMeta` lands on `tool/ptc-dispatch.data.meta`. Task-mark tools MUST refuse nested calls.
 - **[live] Execution order.** The native executor runs the calls of one assistant message **sequentially**: `tool/call` → `tool/result` for the first call, then the next, in call order. A call's result is committed before the next call starts.
 - `tools/pre-execute` (waterfall) and `ctx.tools.guard()` exist; the plugin does not need them in the base design.
+- **Schema subset.** `parameters` and `output.schema` must use only `type` (exactly one string: type arrays are refused), `oneOf`, `properties`, `required`, `additionalProperties`, `items`, `enum`, `const`, plus the annotations `description`, `title`, `default`, `examples` — enforced by `assertSupportedJsonSchema` (`packages/core/tools/src/json-schema.ts`, L76–L90, L302–L374). A nullable field is written as `oneOf: [{ "type": "string" }, { "type": "null" }]`.
+- **Arguments are not validated.** The registry validates the *returned value* against `output.schema` and nothing checks `exec.arguments` against `parameters` (`packages/core/tools/src/pipeline.ts` `dispatchToolBody`; neither the registry nor `dsh-tool-executor-native` reads `parameters` on execution). A tool must validate its own arguments.
+- **Errors.** A tool that throws yields `isError: true` with `content: [{ type: 'text', text: 'Error: <message>' }]` and **no** `meta` (`toolErrorResult`, `pipeline.ts` L719). Error text is therefore model-facing and belongs in `host/texts.js`.
 
 ## 5. Agent hooks (public)
 
@@ -144,6 +147,7 @@ There is no public way to pass a ready-made summary or a custom instruction to `
 
 - A `Config` schema built with `@deepseek-ai/schemastery`; fields marked `.volatile()` render as live rows on the Plugins page and are re-resolved without reload. The plugin reads them through the reactive `config` passed to `apply`.
 - **[live] Module resolution is layout-dependent.** With the bundle physically inside `profiles/<name>/node_modules/` (registry installs), bare `import('@deepseek-ai/schemastery')`, `…/dsh-compaction`, `…/dsh-compaction-basic` and `…/dsh-llm` all succeed, because the profiles directory holds `node_modules/@deepseek-ai/*` links to the runtime. With a development install (`dsh plugin add <local path>` creates a pnpm `link:`), Node resolves the real path and the same imports fail. Use bare imports first, then fall back to `createRequire` anchored at the DSH runtime (`process.argv[1]`'s `node_modules`). See [07 Q4](07-open-questions.md#q4).
+- **[live] Declaring the packages as `peerDependencies` does not link them.** After `dsh plugin add <local path>` the profile's `node_modules` held only the plugin's own symlink — no `@deepseek-ai/*` entries at all — and the runtime fallback in `host/resolve.js` is what makes `@deepseek-ai/schemastery` available. A row's `config` is still applied: setting `minSpanTokens` in the profile's `cordis.patch.yml` changed the verdicts of the next session (M2, [report](../m2/REPORT.md)).
 
 ## 10. Client (public)
 

@@ -90,7 +90,9 @@ Tasks:
 
 Acceptance: 100% branch coverage of `projection.js` and `cuts.js`; property tests run 1,000 cases in < 10 s.
 
-### M2 — Tools without folding
+### M2 — Tools without folding — **done 2026-11-20**
+
+Result: `host/{texts,settings,resolve,estimate,tools,index}.js`, the bundle manifest (`package.json`, `cordis.patch.yml`, `locale/en.json`, `icon.svg`) and 39 new tests (92 total; the prompt surface measures 2,790 of the 3,400-character budget). Installed into a scratch profile as a pnpm link, the plugin registered all three tools and its prompt section; live sessions opened, nested and closed tasks, one message produced the relay `endCut(inner) == beginCut(sibling)`, a merge and a resume after restart, and the journals replay to the expected state (`test/fixtures/logs/`, `test/m2-journals.test.js`). Answers: Q4 settled — peers are not linked. Deviations: the task_end value also carries the fields `presentationMeta` needs, and the absorbed verdict covers any absorbed boundary rather than `beginCut` alone (both reflected in 03/04). Details: [`m2/REPORT.md`](../m2/REPORT.md).
 
 Goal: the plugin installs, the model can open and close tasks, verdicts land in the log, the projection is live. No folds yet.
 

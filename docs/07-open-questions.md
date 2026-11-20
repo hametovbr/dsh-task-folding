@@ -42,7 +42,7 @@ Each question names the assumption, why it matters, and how it was (or will be) 
 
 **Answer (M0):** layout-dependent. With the bundle inside `profiles/<name>/node_modules/` (registry install), bare imports of `@deepseek-ai/dsh-compaction-basic`, `…/dsh-compaction`, `…/dsh-llm` and `@deepseek-ai/schemastery` succeed. With a development install (`dsh plugin add <path>` → pnpm `link:`), they fail because Node resolves the link's real path.
 **Design change:** `engine-adapter.js` and `settings.js` try a bare import first, then `createRequire` anchored at the DSH runtime's `node_modules` (development installs only).
-**Still open:** whether declaring the packages as `peerDependencies` makes `dsh plugin add` link them. Settle in M2 with a copy of the probe.
+**Settled (M2):** declaring them as `peerDependencies` does **not** make `dsh plugin add` link them — the profile's `node_modules` gained only the plugin's own symlink, and the runtime-anchored fallback is what resolves `@deepseek-ai/schemastery` ([report](../m2/REPORT.md)). Peers stay declared anyway, because the runtime gates the plugin on their ranges; they are marked `peerDependenciesMeta.optional` so a dev install of this repository does not pull the whole host, and the host ignores that flag when gating (`docs/02-host-api.md` §1).
 
 <a id="q5"></a>
 ## Q5 — Checkpoint framing for mid-history folds

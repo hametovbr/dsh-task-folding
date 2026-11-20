@@ -282,7 +282,7 @@ Exact schemas and texts: [04-tools-and-prompt.md](04-tools-and-prompt.md).
 
 - Refuse nested PTC calls (`exec.callId !== exec.rootCallId`; for direct calls both equal the call's own id — M0 Q1): "call task_begin directly, not from run_code".
 - Assign `id = 'T' + state.nextId`. The native executor runs one message's calls sequentially and commits each result before the next call starts (M0 Q9), so a second `task_begin` in the same batch already sees the first one's id. As a cheap guard against a future concurrent executor, also keep an in-memory per-session high-water mark and use `max(state.nextId, reserved)`.
-- `parent` = innermost id of `stateOf(session).open` at execute time (a begin later in the same batch than another begin does not see it as parent — acceptable: siblings).
+- `parent` = innermost id of `stateOf(session).open` at execute time. Because each result is committed before the next call of the batch starts (M0 Q9), a second `task_begin` in the same message *does* see the first task open and becomes its child; closing the parent merges it. Verified live in M2.
 - Returns `{ ok: true, id, title, parent, depth }`; meta `BeginMeta`.
 
 ### 6.2 `task_end({ summary, id?, outcome? })`

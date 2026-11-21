@@ -80,16 +80,27 @@ const plugin = {
       return
     }
 
-    projection.handle = Promise.resolve(
-      ctx.sessionProjections.register({
-        key: PROJECTION_KEY,
-        stateSchema,
-        init: initState,
-        apply: reduce,
-        stateVersion: STATE_VERSION,
-        wire: { viewSchema, view },
-      }),
-    )
+    // The projection is as load-bearing as the tools: without it `stateOf` cannot answer, so a
+    // missing service must deactivate the plugin the same way a missing tool sink does — with one
+    // line naming the service, not a TypeError thrown halfway through a partial registration.
+    try {
+      projection.handle = Promise.resolve(
+        ctx.sessionProjections.register({
+          key: PROJECTION_KEY,
+          stateSchema,
+          init: initState,
+          apply: reduce,
+          stateVersion: STATE_VERSION,
+          wire: { viewSchema, view },
+        }),
+      )
+    } catch (error) {
+      for (const dispose of registered) dispose()
+      ctx.logger.warn(
+        `${PLUGIN_NAME}: not activated, ${reason(error)} Fold state needs a session projection; nothing was registered.`,
+      )
+      return
+    }
     projection.handle.catch((/** @type {unknown} */ error) => {
       ctx.logger.error(`${PLUGIN_NAME}: projection registration failed: ${reason(error)}`)
     })

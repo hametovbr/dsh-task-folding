@@ -117,6 +117,18 @@ function onAssistant(state, event) {
  * @returns {State}
  */
 function onToolResult(state, event) {
+  // A journal is the only input, so it can be damaged: an event whose seq cannot exist (the host
+  // numbers events from zero upward) must not become a cut, because a negative one is exactly the
+  // ABSORBED sentinel and would open a task that is born collapsed.
+  if (!Number.isInteger(event.seq) || event.seq < 0) return state
+  const carried = /** @type {Record<string, unknown> | null} */ (
+    event.data && typeof event.data.meta === 'object' && event.data.meta !== null ? event.data.meta : null
+  )
+  // Meta is written by this plugin, but a log can be replayed by a newer or an older version of it:
+  // a payload that names a different state schema is not ours to interpret.
+  if (carried !== null && carried.stateVersion !== undefined && carried.stateVersion !== STATE_VERSION) {
+    return state
+  }
   let s = noteSurfaceAppend(state, event.seq)
   const callId = event.data && event.data.message && event.data.message.toolCallId
   const inBatch = s.batch !== null && typeof callId === 'string' && s.batch.waiting.includes(callId)

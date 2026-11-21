@@ -386,6 +386,11 @@ All fields are live: `minSpanTokens`, `delegateEnabled`, `minSummaryChars` and `
 | taskfold installed too | Tool-name collision fails registration; the plugin logs "uninstall dsh-taskfold" and stays inactive. |
 | Summary not smaller than the span | Self path demotes to delegate (in memory); delegate path counts toward the durable cap. |
 | A tool marked `deferLoading` never receives a `tool_addition` in 0.2.2-rc.5 | Its definition stays out of context for the session, so the model may never call it; `fold_recall` is therefore not deferred (07 Q6, measured live). |
+| No session-projection service | The plugin does not activate: one warn line names the service and everything registered before it is disposed, exactly like a missing tool sink. Fold state has nowhere to live. |
+| No `llm` service | Delegate summaries are off; a `delegate` verdict leaves the task waiting; the one-shot line says so, and nothing retries. |
+| A journal carries `meta` written under another `stateVersion` | The payload is ignored (not reinterpreted); the projection keeps its own version and the log still replays. |
+| A journal event has a seq the host cannot have produced (negative, non-integer) | The event is ignored rather than used as a cut: a negative seq is the `ABSORBED` sentinel, and a task born collapsed would be silent corruption. |
+| `compaction/summary` without `shadowedSeqs` | The fold still applies when its `surfaceOp` edges match a waiting span (only cut translation needs the shadowed set), so a host that omits it costs precision, not correctness (`test/degradation.test.js`). |
 
 ## 12. Invariants (tested)
 

@@ -74,8 +74,8 @@ the settings card, which is the only way to close F7 and to prove the client mod
 
 | Phase | Work | Deliverable | Exit criterion | Effort |
 |---|---|---|---|---|
-| **T0** | Manifest + environment contract: every `exports` path exists, `dsh.client` shape, `files` covers what is documented, the pack installs into an empty profile | `test/manifest.test.js`, `scripts/check-pack.sh` | fails on any broken path or missing file in the tarball | 0.5 d |
-| **T1** | Degradation suite: engine missing, `llm` missing, no tool sink, malformed `meta`, unknown `stateVersion`, foreign-realm log | `test/degradation.test.js` | each case has an asserted behaviour and a single log line; none throws | 1 d |
+| **T0** | Manifest + environment contract: every `exports` path exists, `dsh.client` shape, `files` covers what is documented, the pack installs into an empty profile | `test/manifest.test.js`, `scripts/check-pack.js` (`npm run pack:check`) — **done** | fails on any broken path or missing file in the tarball | 0.5 d |
+| **T1** | Degradation suite: engine missing, `llm` missing, no tool sink, malformed `meta`, unknown `stateVersion`, foreign-realm log — **done 2026-11-21** | `test/degradation.test.js` (14 tests, 0 skipped) | each case has an asserted behaviour and a single log line; none throws | 1 d |
 | **T2** | Property suite (P1 list) over generated event streams (append, replace, prune, compaction, task tool calls) | `test/invariants.test.js` | 8 properties × ≥ 200 cases each, deterministic with a fixed seed, one failing seed reproducible from the report | 2 d |
 | **T3** | Fault injection in the runner and adapter (P4 list) | `test/faults.test.js` | every seam has a throw/abort/lock case; no unhandled rejection; durable records counted | 1.5 d |
 | **T4** | Coverage gate extended to `host/*.js` + mutation run on the three pure modules | CI change, `stryker.conf.json` | gate green; mutation score ≥ 85 %; report committed under `docs/` | 1.5 d |

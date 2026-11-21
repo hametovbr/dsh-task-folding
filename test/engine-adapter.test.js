@@ -49,6 +49,46 @@ class BusyError extends Error {
   }
 }
 
+/**
+ * A stub engine that keeps the error summarize() threw, so a test can prove rejectRegion fails
+ * the transaction inside the summarize stage rather than before it.
+ */
+class RecordingEngine extends StubEngine {
+  /** @type {RecordingEngine[]} */
+  static instances = []
+  /** @type {Error | null} */
+  summarizeError = null
+
+  /** @param {any} ctx @param {any} config */
+  constructor(ctx, config) {
+    super(ctx, config)
+    RecordingEngine.instances.push(this)
+  }
+
+  /**
+   * @override
+   * @param {number} start
+   * @param {number} end
+   * @param {any} agent
+   * @param {AbortSignal} [signal]
+   */
+  async compactRegion(start, end, agent, signal) {
+    try {
+      return await super.compactRegion(start, end, agent, signal)
+    } catch (error) {
+      this.summarizeError = /** @type {Error} */ (error)
+      throw error
+    }
+  }
+}
+
+const recordingLoader = async (/** @type {string} */ spec) => {
+  if (spec === '@deepseek-ai/dsh-compaction-basic')
+    return { BasicCompactionEngine: RecordingEngine, default: RecordingEngine }
+  if (spec === '@deepseek-ai/dsh-compaction') return PUBLIC_API
+  return null
+}
+
 const PUBLIC_API = {
   ManualCompactionError: BusyError,
   /** @param {any} session @param {any} seq */
@@ -128,6 +168,37 @@ test('a fold never touches the LLM seam', async () => {
     model: 'm',
   })
   assert.deepEqual(result.summary, [{ type: 'text', text: 'x' }])
+})
+
+test('rejectRegion fails the transaction inside summarize, with a fixed error', async () => {
+  resetFoldEngine()
+  RecordingEngine.instances = []
+  const engine = await createFoldEngine(context(), { loader: recordingLoader })
+  assert.ok(engine)
+  const agent = { session: { id: 's' }, options: {} }
+  await assert.rejects(engine.rejectRegion(agent, 3, 9), {
+    message: 'task-folding: the delegate summary could not be generated',
+  })
+  const recorded = RecordingEngine.instances.at(-1)
+  assert.ok(recorded, 'the transaction ran on the plugin engine')
+  assert.deepEqual(recorded.transaction, { start: 3, end: 9, agent, signal: undefined })
+  assert.equal(
+    recorded.summarizeError?.message,
+    'task-folding: the delegate summary could not be generated',
+    'summarize threw inside the transaction, so the host records compaction/end{error}',
+  )
+  assert.equal(/** @type {any} */ (recorded).reject, false, 'reject mode is cleared after the transaction')
+})
+
+test('a fold after a rejected region still returns the prepared blocks', async () => {
+  resetFoldEngine()
+  const engine = await createFoldEngine(context(), { loader: loader() })
+  assert.ok(engine)
+  const agent = { session: { id: 's' }, options: {} }
+  await assert.rejects(engine.rejectRegion(agent, 3, 9))
+  const blocks = [{ type: 'text', text: '# T1 · t\nbody\n\n— fold of T1' }]
+  const result = await engine.foldRegion(agent, 1, 2, blocks, { provider: 'p', model: 'm' })
+  assert.deepEqual(result, { start: 1, end: 2, summary: blocks, provider: 'p', model: 'm' })
 })
 
 test('classify separates busy, a refused summary and everything else', async () => {

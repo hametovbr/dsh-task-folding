@@ -6,15 +6,16 @@ import { test } from 'node:test'
 
 import { SpanEstimator } from '../host/estimate.js'
 import { createFoldRunner } from '../host/fold-runner.js'
+import { resolveRegion } from '../host/planner.js'
 import { Sim } from './fixtures/sim.js'
-import { fakeMeter, harnessOf, sessionOf } from './fixtures/tools.js'
+import { fakeMeter, at, harnessOf, sessionOf } from './fixtures/tools.js'
 
 /** A summary long enough to be usable. */
 const SUMMARY = `## Done\n${'Summarized the work with its changed paths and the reason for each choice. '.repeat(3)}`
 
 /**
  * @param {Sim} sim
- * @param {{ meter?: any, engine?: any, now?: () => number, estimator?: any }} [options]
+ * @param {{ meter?: any, engine?: any, now?: () => number, estimator?: any, delegate?: any }} [options]
  */
 function runnerOf(sim, options = {}) {
   /** @type {string[]} */
@@ -27,6 +28,7 @@ function runnerOf(sim, options = {}) {
     estimator,
     logger: { warn: (/** @type {string} */ message) => logs.push(message) },
     now: options.now ?? (() => 0),
+    delegate: options.delegate,
   })
   return { runner, logs, engine, estimator }
 }
@@ -44,14 +46,23 @@ function successEngine(sim) {
      * @param {any[]} blocks
      * @param {any} route
      * @param {AbortSignal | undefined} signal
+     * @param {any} [usage]
      */
-    async foldRegion(agent, start, end, blocks, route, signal) {
-      calls.push({ agent, start, end, blocks, route, signal })
+    async foldRegion(agent, start, end, blocks, route, signal, usage) {
+      calls.push({ agent, start, end, blocks, route, signal, usage })
       sim.compact(start, end)
       return { start, end }
     },
     balancedBefore: () => true,
     balancedAfter: () => true,
+    /**
+     * @param {any} _agent
+     * @param {number} _start
+     * @param {number} _end
+     */
+    async rejectRegion(_agent, _start, _end) {
+      throw new Error('this test never records a failed delegate generation')
+    },
     /** @returns {'busy' | 'summary' | 'other'} */
     classify: () => 'other',
   }
@@ -87,16 +98,25 @@ function busyOnceEngine(sim) {
      * @param {any} route
      * @param {AbortSignal | undefined} signal
      */
-    async foldRegion(agent, start, end, blocks, route, signal) {
+    /** @param {any} agent @param {number} start @param {number} end @param {any[]} blocks @param {any} route @param {AbortSignal | undefined} signal @param {any} [usage] */
+    async foldRegion(agent, start, end, blocks, route, signal, usage) {
       if (busy) {
         busy = false
         success.calls.push({ busy: true })
         throw new Error('busy')
       }
-      return success.foldRegion(agent, start, end, blocks, route, signal)
+      return success.foldRegion(agent, start, end, blocks, route, signal, usage)
     },
     balancedBefore: success.balancedBefore,
     balancedAfter: success.balancedAfter,
+    /**
+     * @param {any} _agent
+     * @param {number} _start
+     * @param {number} _end
+     */
+    async rejectRegion(_agent, _start, _end) {
+      throw new Error('this test never records a failed delegate generation')
+    },
     /** @param {unknown} error @returns {'busy' | 'other'} */
     classify: (error) => (error instanceof Error && error.message === 'busy' ? 'busy' : 'other'),
   }
@@ -114,6 +134,179 @@ function routedAgent(sim) {
     data: { header: { config: { provider: 'header-provider', model: 'header-model' } }, reason: 'initial' },
   })
   return agentOf(sim)
+}
+
+/**
+ * A delegate seam whose generations the test settles explicitly, so phase 1 can be observed while
+ * the generation is still pending and without any timer.
+ *
+ * @param {{ supports?: () => boolean }} [options]
+ */
+function delegateOf(options = {}) {
+  /** @type {{ agent: any, task: any, region: any, signal: AbortSignal | undefined, nodes: readonly number[] }[]} */
+  const starts = []
+  /** @type {((result: { blocks: any[], regionKey?: string, usage?: any } | null) => void)[]} */
+  const settle = []
+  let supportCalls = 0
+  const delegate = {
+    supports() {
+      supportCalls += 1
+      return options.supports === undefined ? true : options.supports()
+    },
+    /**
+     * @param {any} agent
+     * @param {any} task
+     * @param {any} region
+     * @param {AbortSignal | undefined} signal
+     */
+    start(agent, task, region, signal) {
+      starts.push({ agent, task, region, signal, nodes: agent.session.surface.nodes.slice() })
+      return new Promise((resolve) => settle.push(resolve))
+    },
+  }
+  return {
+    delegate,
+    starts,
+    supportCalls: () => supportCalls,
+    /**
+     * @param {number} index
+     * @param {{ blocks: any[], regionKey?: string, usage?: any } | null} result
+     */
+    resolve(index, result) {
+      const resolveGeneration = settle[index]
+      if (resolveGeneration === undefined) throw new Error(`no pending generation at ${index}`)
+      resolveGeneration(result)
+    },
+  }
+}
+
+/** Let the runner's deferred microtasks run; no timer is involved. */
+async function flushMicrotasks() {
+  for (let i = 0; i < 6; i += 1) await Promise.resolve()
+}
+
+/**
+ * Await a promise under a bounded number of microtasks, so a pass that wrongly waits for a pending
+ * generation fails the test instead of hanging the run.
+ *
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {string} message
+ * @returns {Promise<T>}
+ */
+async function awaitWithinMicrotasks(promise, message) {
+  /** @type {T | undefined} */
+  let value
+  let settled = false
+  let rejected = false
+  promise.then(
+    (result) => {
+      settled = true
+      value = result
+    },
+    () => {
+      settled = true
+      rejected = true
+    },
+  )
+  for (let i = 0; i < 100 && !settled; i += 1) await Promise.resolve()
+  if (!settled) assert.fail(message)
+  if (rejected) assert.fail(`${message}; the pass rejected instead of resolving`)
+  return /** @type {T} */ (value)
+}
+
+/**
+ * A session with one closed `delegate` task (T1): its own summary is too short.
+ *
+ * @returns {Promise<Sim>}
+ */
+async function delegateTask() {
+  const sim = new Sim()
+  const h = harnessOf(sim, { meter: fakeMeter() })
+  await h.batch([{ name: 'task_begin', args: { title: 'delegated' } }])
+  sim.work(4)
+  await h.batch([{ name: 'task_end', args: { summary: 'Too short.' } }])
+  assert.equal(sim.state.tasks.T1?.status, 'delegate')
+  return sim
+}
+
+/**
+ * A session with two closed `delegate` tasks (T1, T2): both summaries are too short.
+ *
+ * @returns {Promise<Sim>}
+ */
+async function twoDelegateTasks() {
+  const sim = new Sim()
+  const h = harnessOf(sim, { meter: fakeMeter() })
+  await h.batch([{ name: 'task_begin', args: { title: 'first' } }])
+  sim.work(4)
+  await h.batch([{ name: 'task_end', args: { summary: 'Too short.' } }])
+  await h.batch([{ name: 'task_begin', args: { title: 'second' } }])
+  sim.work(4)
+  await h.batch([{ name: 'task_end', args: { summary: 'Too short.' } }])
+  assert.equal(sim.state.tasks.T1?.status, 'delegate')
+  assert.equal(sim.state.tasks.T2?.status, 'delegate')
+  return sim
+}
+
+/**
+ * A session with an inner `queued` task (T2) and an outer `delegate` task (T1) whose summary is
+ * too short; the outer span contains the inner span.
+ *
+ * @returns {Promise<Sim>}
+ */
+async function nestedDelegateTask() {
+  const sim = new Sim()
+  const h = harnessOf(sim, { meter: fakeMeter() })
+  await h.batch([{ name: 'task_begin', args: { title: 'outer' } }])
+  await h.batch([{ name: 'task_begin', args: { title: 'inner' } }])
+  sim.work(4)
+  await h.batch([{ name: 'task_end', args: { summary: SUMMARY } }])
+  sim.work(4)
+  await h.batch([{ name: 'task_end', args: { summary: 'Too short.' } }])
+  assert.equal(sim.state.tasks.T2?.status, 'queued')
+  assert.equal(sim.state.tasks.T1?.status, 'delegate')
+  return sim
+}
+
+/**
+ * A success engine whose `rejectRegion` records the failure the way the host does: a zero-cost
+ * failed compaction that is then rethrown.
+ *
+ * @param {Sim} sim
+ */
+function rejectEngine(sim) {
+  const success = successEngine(sim)
+  /** @type {{ start: number, end: number }[]} */
+  const rejects = []
+  return {
+    calls: success.calls,
+    foldRegion: success.foldRegion,
+    balancedBefore: success.balancedBefore,
+    balancedAfter: success.balancedAfter,
+    classify: success.classify,
+    rejects,
+    /**
+     * @param {any} _agent
+     * @param {number} start
+     * @param {number} end
+     * @param {AbortSignal | undefined} _signal
+     */
+    async rejectRegion(_agent, start, end, _signal) {
+      rejects.push({ start, end })
+      sim.failCompaction()
+      throw new Error('the summary is unavailable')
+    },
+  }
+}
+
+/**
+ * The region fields the runner hands over, without the key it owns.
+ *
+ * @param {{ start: number, end: number, startIndex: number, endIndex: number }} region
+ */
+function boundsOf(region) {
+  return { start: region.start, end: region.end, startIndex: region.startIndex, endIndex: region.endIndex }
 }
 
 test('due tasks fold inner-first, and the outer span survives the inner fold', async () => {
@@ -471,6 +664,7 @@ test('a failing pass is logged and never breaks the boundary', async () => {
     },
     engine: async () => ({
       foldRegion: async () => ({}),
+      rejectRegion: async () => ({}),
       balancedBefore: () => true,
       balancedAfter: () => true,
       classify: () => 'other',
@@ -500,4 +694,282 @@ test('without an engine nothing folds and nothing is logged', async () => {
   const report = await runner.pass(agentOf(sim), undefined, true)
   assert.deepEqual(report, { folded: 0, busy: false, skipped: [] })
   assert.deepEqual(logs, [])
+})
+
+// ---------------------------------------------------------------------------
+// Two-phase delegate folds (docs/03 §5.4, docs/adr/0006)
+
+test('a delegate generation starts without blocking the pass', async () => {
+  const sim = await delegateTask()
+  const ctl = delegateOf()
+  const { runner, engine } = runnerOf(sim, { delegate: ctl.delegate })
+
+  const pass = runner.pass(agentOf(sim), undefined, true)
+  const report = await awaitWithinMicrotasks(pass, 'the pass must not wait for the generation')
+  assert.deepEqual(report, { folded: 0, busy: false, skipped: [] })
+  assert.equal(ctl.starts.length, 1, 'one generation started')
+  assert.equal(at(ctl.starts, 0).task.id, 'T1')
+  assert.equal(engine.calls.length, 0, 'the pass folded nothing while the generation is pending')
+  assert.equal(sim.state.tasks.T1?.status, 'delegate')
+})
+
+test('the next boundary commits the generated blocks for the same region', async () => {
+  const sim = await delegateTask()
+  const ctl = delegateOf()
+  const { runner, engine } = runnerOf(sim, { delegate: ctl.delegate })
+  const agent = agentOf(sim)
+
+  const first = await runner.pass(agent, undefined, true)
+  assert.equal(first.folded, 0)
+  assert.equal(engine.calls.length, 0)
+  assert.equal(ctl.starts.length, 1)
+  const region = at(ctl.starts, 0).region
+  const blocks = [{ type: 'text', text: '## Delegated\nSummarized by the background call.' }]
+
+  // The runner owns the region key: a key echoed by the summarizer must not steer the commit.
+  ctl.resolve(0, { blocks, regionKey: 'not-the-key-the-runner-computed' })
+  await flushMicrotasks()
+  assert.equal(sim.state.tasks.T1?.status, 'delegate', 'settling a generation commits nothing by itself')
+
+  const second = await runner.pass(agent, undefined, true)
+  assert.equal(second.folded, 1)
+  assert.equal(engine.calls.length, 1)
+  assert.equal(engine.calls[0].start, region.start)
+  assert.equal(engine.calls[0].end, region.end)
+  assert.deepEqual(engine.calls[0].blocks, blocks)
+  assert.equal(sim.state.tasks.T1?.status, 'folded')
+  assert.equal(ctl.starts.length, 1, 'the generated text is reused, not regenerated')
+})
+
+test('a region an external compaction replaced is never committed twice', async () => {
+  const sim = await delegateTask()
+  const ctl = delegateOf()
+  const { runner, engine } = runnerOf(sim, { delegate: ctl.delegate })
+  const agent = agentOf(sim)
+
+  await runner.pass(agent, undefined, true)
+  assert.equal(ctl.starts.length, 1)
+  const region = at(ctl.starts, 0).region
+
+  // Another compaction swallows the delegate task's own span while its summary is generated.
+  sim.compact(region.start, region.end)
+  // The host replacement covers the whole span, so the projection records a fold of T1 by that
+  // other transaction (not an absorbed task: nothing outside the span was shadowed).
+  assert.equal(sim.state.tasks.T1?.status, 'folded')
+  assert.equal(sim.state.folds[0]?.taskId, 'T1')
+
+  const blocks = [{ type: 'text', text: '## Stale\nThis text describes a surface that has moved.' }]
+  ctl.resolve(0, { blocks })
+  await flushMicrotasks()
+
+  const report = await runner.pass(agent, undefined, true)
+  assert.equal(report.folded, 0)
+  assert.equal(engine.calls.length, 0, 'the generated text never reached foldRegion')
+  assert.equal(sim.state.tasks.T1?.status, 'folded', 'the external compaction folded the task')
+  assert.equal(ctl.starts.length, 1, 'a task that left the waiting set starts nothing new')
+
+  await runner.pass(agent, undefined, true)
+  assert.equal(ctl.starts.length, 1)
+})
+
+test('replacing a node inside the region drops the generated text', async () => {
+  const sim = await delegateTask()
+  const ctl = delegateOf()
+  const { runner, engine } = runnerOf(sim, { delegate: ctl.delegate })
+  const agent = agentOf(sim)
+
+  await runner.pass(agent, undefined, true)
+  assert.equal(ctl.starts.length, 1)
+  const first = at(ctl.starts, 0)
+  // The pruner replaces one result inside the span while the summary is generated, keeping every
+  // boundary and index in place. The region key has to notice the changed node list.
+  sim.prune(at(sim.nodes, first.region.startIndex + 1))
+  assert.equal(sim.state.tasks.T1?.status, 'delegate')
+
+  const blocks = [{ type: 'text', text: '## Stale\nThis text describes a surface that has moved.' }]
+  ctl.resolve(0, { blocks })
+  await flushMicrotasks()
+
+  const report = await runner.pass(agent, undefined, true)
+  assert.equal(report.folded, 0)
+  assert.equal(engine.calls.length, 0, 'the stale text never reached foldRegion')
+  assert.equal(sim.state.tasks.T1?.status, 'delegate', 'the task is not folded by the stale text')
+  assert.equal(ctl.starts.length, 1, 'the pass that dropped the text starts nothing new')
+
+  // The dropped text is regenerated at a later boundary, now for the changed region.
+  await runner.pass(agent, undefined, true)
+  assert.equal(ctl.starts.length, 2)
+  assert.equal(at(ctl.starts, 1).task.id, 'T1')
+  assert.notEqual(at(ctl.starts, 1).region.regionKey, first.region.regionKey)
+})
+
+test('nodes appended after the region do not drop a valid summary', async () => {
+  const sim = await delegateTask()
+  const ctl = delegateOf()
+  const { runner, engine } = runnerOf(sim, { delegate: ctl.delegate })
+  const agent = agentOf(sim)
+
+  await runner.pass(agent, undefined, true)
+  assert.equal(ctl.starts.length, 1)
+  const region = at(ctl.starts, 0).region
+  const lengthBefore = sim.nodes.length
+
+  // The model keeps writing after the task closed; nothing inside the region changed.
+  sim.work(2)
+  assert.equal(sim.nodes.length, lengthBefore + 4)
+
+  const blocks = [{ type: 'text', text: '## Kept\nThis text still describes the region.' }]
+  ctl.resolve(0, { blocks })
+  await flushMicrotasks()
+
+  const report = await runner.pass(agent, undefined, true)
+  assert.equal(report.folded, 1)
+  assert.equal(engine.calls.length, 1)
+  assert.equal(engine.calls[0].start, region.start)
+  assert.equal(engine.calls[0].end, region.end)
+  assert.deepEqual(engine.calls[0].blocks, blocks)
+  assert.equal(sim.state.tasks.T1?.status, 'folded')
+  assert.equal(ctl.starts.length, 1, 'appending after the region does not regenerate')
+})
+
+test('a failed generation is recorded as a durable attempt', async () => {
+  const sim = await delegateTask()
+  const ctl = delegateOf()
+  const engine = rejectEngine(sim)
+  const { runner } = runnerOf(sim, { engine, delegate: ctl.delegate })
+  const agent = agentOf(sim)
+
+  await runner.pass(agent, undefined, true)
+  assert.equal(ctl.starts.length, 1)
+  const region = at(ctl.starts, 0).region
+  ctl.resolve(0, null)
+  await flushMicrotasks()
+
+  const report = await runner.pass(agent, undefined, true)
+  assert.equal(report.folded, 0)
+  assert.deepEqual(engine.rejects, [{ start: region.start, end: region.end }])
+  assert.equal(engine.calls.length, 0, 'a failed generation never reaches foldRegion')
+  assert.equal(sim.state.tasks.T1?.status, 'delegate')
+  assert.equal(sim.state.tasks.T1?.failures, 1, 'the host recorded one failed compaction attempt')
+})
+
+test('at most one generation is in flight per session', async () => {
+  const sim = await twoDelegateTasks()
+  const ctl = delegateOf()
+  const { runner, engine } = runnerOf(sim, { delegate: ctl.delegate })
+  const agent = agentOf(sim)
+
+  await runner.pass(agent, undefined, true)
+  assert.equal(ctl.starts.length, 1, 'only the first due delegate task starts')
+  assert.equal(at(ctl.starts, 0).task.id, 'T1')
+
+  await runner.pass(agent, undefined, true)
+  assert.equal(ctl.starts.length, 1, 'a generation is already in flight; the second task waits')
+
+  ctl.resolve(0, { blocks: [{ type: 'text', text: '## First\nSummarized.' }] })
+  await flushMicrotasks()
+  const report = await runner.pass(agent, undefined, true)
+  assert.equal(report.folded, 1)
+  assert.equal(engine.calls.length, 1, 'only the committed first task reached foldRegion')
+  assert.equal(ctl.starts.length, 2, 'the second task gets its turn once the first generation ended')
+  assert.equal(at(ctl.starts, 1).task.id, 'T2')
+  assert.equal(sim.state.tasks.T1?.status, 'folded')
+  assert.equal(sim.state.tasks.T2?.status, 'delegate')
+})
+
+test('without the delegate seam a delegate task waits and nothing is logged', async () => {
+  const sim = await delegateTask()
+  const { runner, engine, logs } = runnerOf(sim)
+  const agent = agentOf(sim)
+
+  await runner.pass(agent, undefined, true)
+  await runner.pass(agent, undefined, true)
+  assert.equal(engine.calls.length, 0)
+  assert.equal(sim.state.tasks.T1?.status, 'delegate')
+  assert.deepEqual(logs, [])
+})
+
+test('a pass that folds a queued task first never hands a stale region to start', async () => {
+  const sim = await nestedDelegateTask()
+  const ctl = delegateOf()
+  const engine = successEngine(sim)
+  const fold = engine.foldRegion
+  /** @type {number[]} */
+  const startsAtCommit = []
+  // The host's compaction transaction commits asynchronously: yield before applying the
+  // replacement. Phase 1 has already started the generation against the current surface, so the
+  // later fold must not be preceded by another start.
+  engine.foldRegion = async (
+    /** @type {any} */ agent,
+    /** @type {number} */ start,
+    /** @type {number} */ end,
+    /** @type {any[]} */ blocks,
+    /** @type {any} */ route,
+    /** @type {AbortSignal | undefined} */ signal,
+  ) => {
+    await Promise.resolve()
+    startsAtCommit.push(ctl.starts.length)
+    return fold(agent, start, end, blocks, route, signal, undefined)
+  }
+  const { runner } = runnerOf(sim, { engine, delegate: ctl.delegate })
+  const agent = agentOf(sim)
+
+  const first = await runner.pass(agent, undefined, true)
+  assert.equal(first.folded, 1, 'the queued inner task folds in this pass')
+  assert.equal(sim.state.tasks.T2?.status, 'folded')
+  assert.equal(sim.state.tasks.T1?.status, 'delegate')
+  assert.equal(ctl.starts.length, 1)
+  assert.deepEqual(startsAtCommit, [1], 'the generation started before the queued fold committed')
+
+  // The region handed over resolved against the surface as it was at hand-over time, not against
+  // an older or a later one.
+  const handed = at(ctl.starts, 0)
+  const current = resolveRegion(handed.task, handed.nodes)
+  assert.ok(current.kind === 'fold')
+  assert.deepEqual(boundsOf(handed.region), boundsOf(current))
+  const moved = resolveRegion(handed.task, sim.nodes)
+  assert.ok(moved.kind === 'fold')
+  assert.notDeepEqual(boundsOf(handed.region), boundsOf(moved))
+
+  const blocks = [{ type: 'text', text: '## Late\nThe pre-fold region summary.' }]
+  ctl.resolve(0, { blocks })
+  await flushMicrotasks()
+
+  const second = await runner.pass(agent, undefined, true)
+  assert.equal(second.folded, 0)
+  assert.equal(ctl.starts.length, 1, 'nothing is started against the moved region')
+  assert.equal(engine.calls.length, 1, 'only the queued fold reached foldRegion')
+  assert.equal(sim.state.tasks.T1?.status, 'delegate')
+})
+
+test('supports() returning false starts nothing and logs nothing', async () => {
+  const sim = await delegateTask()
+  const ctl = delegateOf({ supports: () => false })
+  const { runner, engine, logs } = runnerOf(sim, { delegate: ctl.delegate })
+  const agent = agentOf(sim)
+
+  await runner.pass(agent, undefined, true)
+  await runner.pass(agent, undefined, true)
+  assert.equal(ctl.starts.length, 0)
+  assert.equal(ctl.supportCalls(), 1, 'the summarizer capability is probed once per process')
+  assert.equal(engine.calls.length, 0)
+  assert.equal(sim.state.tasks.T1?.status, 'delegate')
+  assert.deepEqual(logs, [])
+})
+
+test('the generated summary carries its provider usage into the fold transaction', async () => {
+  // The host records `compaction/summary.data.usage` from the summarize result; that row is the
+  // only place the plugin's cache-hit can be audited (docs/03 §12 invariant 9), so the delegate
+  // seam's usage must reach `foldRegion` unchanged.
+  const sim = await delegateTask()
+  const ctl = delegateOf()
+  const { runner, engine } = runnerOf(sim, { delegate: ctl.delegate })
+  const agent = agentOf(sim)
+  await runner.pass(agent, undefined, true)
+  const usage = { inputTokens: 42, cacheReadTokens: 900, cacheWriteTokens: 0, totalTokens: 942 }
+  ctl.resolve(0, { blocks: [{ type: 'text', text: '## Done\nGenerated.' }], usage })
+  await flushMicrotasks()
+  await runner.pass(agent, undefined, true)
+  assert.equal(engine.calls.length, 1)
+  assert.deepEqual(engine.calls[0].usage, usage, 'usage is forwarded verbatim')
 })

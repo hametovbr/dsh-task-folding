@@ -10,16 +10,13 @@
 /**
  * A `CompactionPort` that would talk to the host's public API.
  *
- * It throws on construction by design: selecting it today would silently disable folds, so the
- * failure has to be loud. `ports/compaction.js` builds the shim implementation instead.
+ * Every operation throws: selecting it today would silently disable folds, so the failure has to be
+ * loud at the point of use. `ports/compaction.js` builds the shim implementation instead, and only a
+ * future factory line selects this one.
  *
  * @implements {CompactionPort}
  */
 export class NativeCompactionPort {
-  constructor() {
-    throw new Error('compaction-native: no public host API yet')
-  }
-
   /** @param {import('./compaction.js').FoldRequest} _request @returns {Promise<any>} */
   async fold(_request) {
     throw new Error('compaction-native: no public host API yet')

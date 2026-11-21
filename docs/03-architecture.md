@@ -73,23 +73,27 @@ Every closed task gets exactly one terminal or pending verdict:
 ```
 host/
   index.js            plugin object: inject, Config, apply()
-  projection.js       pure reducer + schema + wire view           (no ctx, no I/O)
+  projection.js       pure reducer + schema + wire view + surfaceEpoch (no ctx, no I/O)
   cuts.js             cut translation helpers                      (pure)
   planner.js          due-task selection and region resolution     (reads surface)
   tools.js            task_begin / task_end / fold_recall          (execute + render + meta)
   fold-runner.js      runs due folds from pre-step / turn-stopping; delegate scheduling
+  runtime/session-runtime.js  one SessionRuntime per session and a pure transition reducer
+  plugin/pre-step.js  the single pre-step orchestrator: fold -> hint -> decision
+  ports/compaction.js the port (fold/reject/classify); compaction-native.js is the upstream stubs
   ports/compaction-shim.js the ONLY module touching dsh-compaction-basic internals
-  ports/compaction.js the port (fold/reject/classify); ports/logger.js, clock.js
+  ports/logger.js     a logger that never throws;  ports/clock.js the clock seam
   summarizer.js       delegate path: prefix-anchored request, instruction, validation
   recall.js           index, range, grep over a fold's shadowed messages
-  hints.js            stale-task hint, durable latch
+  hints.js            stale-task and empty-span hints, durable latch
   estimate.js         span token estimate via ctx.tokenMeter.estimateMessage
   settings.js         Config schema and safe readers
 client/
   index.js            dock + settings card
+  client.locale.generated.js  the dictionary generated from locale/en.json
 ```
 
-Dependency direction: `projection`, `cuts` are leaves; `planner`, `recall`, `hints`, `estimate` read the projection and the session; `tools` and `fold-runner` orchestrate; only `ports/compaction-shim` and `summarizer` know about compaction internals or the LLM.
+Dependency direction: `projection`, `cuts` are leaves; `planner`, `recall`, `hints`, `estimate` read the projection and the session; `runtime` is pure state and transitions over the projection; `tools`, `fold-runner` and `plugin/pre-step` orchestrate; only `ports/compaction-shim`, `ports/llm`-shaped `summarizer` know about compaction internals or the LLM, and only `ports/` reaches the host.
 
 ## 4. Data model
 

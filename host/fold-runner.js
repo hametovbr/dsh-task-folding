@@ -3,9 +3,24 @@
 // session.snapshotEvents(), never iterates the event log and never awaits an LLM. A delegate
 // summary is generated in an un-awaited background promise and committed at a later boundary
 // (docs/adr/0006-background-delegate.md).
+//
+// The runner keeps no state of its own across boundaries except one `WeakMap<session,
+// SessionRuntime>` (docs/10 §4.2). Every transition goes through the pure reducer in
+// `runtime/session-runtime.js`, which refuses the ones the failure table of docs/10 §12 does not
+// allow; the runner reads the runtime again after every `await`, so a background generation that
+// settles mid-pass is never overwritten by a stale local copy.
 
 import { dueTasks, resolveRegion } from './planner.js'
 import { createLogPort } from './ports/logger.js'
+import { TERMINAL, WAITING } from './projection.js'
+import {
+  MAX_TASK_ATTEMPTS,
+  createSessionRuntime,
+  isBackingOff,
+  reduce,
+  skipReason,
+  taskRuntime,
+} from './runtime/session-runtime.js'
 import * as texts from './texts.js'
 
 /** @typedef {import('./types.js').State} State */
@@ -16,6 +31,11 @@ import * as texts from './texts.js'
 /** @typedef {import('./ports/compaction.js').FoldRoute} FoldRoute */
 /** @typedef {import('./ports/compaction.js').SummaryResult} SummaryResult */
 /** @typedef {import('./estimate.js').SpanEstimator} SpanEstimator */
+/** @typedef {import('./runtime/session-runtime.js').Action} Action */
+/** @typedef {import('./runtime/session-runtime.js').SessionRuntime} SessionRuntime */
+
+/** Retry 1, 2, 4, 8 boundaries after an unexpected fold failure (docs/03 §5.3). */
+export { MAX_BACKOFF_BOUNDARIES } from './runtime/session-runtime.js'
 
 /**
  * A fold region plus the key the runner computed for it before starting a delegate generation.
@@ -47,8 +67,6 @@ import * as texts from './texts.js'
 
 /** A pre-step slower than this means the fold work is no longer negligible. */
 export const SLOW_PASS_MS = 100
-/** Retry 1, 2, 4, 8 boundaries after an unexpected failure (in memory, docs/03 §5.3). */
-export const MAX_BACKOFF_BOUNDARIES = 8
 
 /**
  * @typedef {object} FoldRunnerDeps
@@ -68,26 +86,52 @@ export const MAX_BACKOFF_BOUNDARIES = 8
  */
 export function createFoldRunner(deps) {
   const now = deps.now ?? (() => Date.now())
-  /** @type {WeakSet<object>} */
-  const inFlight = new WeakSet()
-  /** @type {WeakMap<object, Map<string, string>>} tasks skipped for the rest of the process */
-  /** @type {WeakMap<any, Map<string, { epoch: number, reason: string }>>} */
-  const skipped = new WeakMap()
-  /** @type {WeakMap<object, Set<string>>} tasks already logged as waiting for another compaction */
-  const waiting = new WeakMap()
-  /** @type {WeakMap<object, Map<string, { failures: number, until: number }>>} */
-  const backoff = new WeakMap()
-  /** @type {WeakMap<object, Map<string, PendingSummary>>} generated summaries waiting for a commit */
-  const pending = new WeakMap()
-  /** @type {WeakMap<object, Map<string, Promise<void>>>} generations in flight (one per session) */
-  const generating = new WeakMap()
-  /** @type {WeakMap<object, Set<string>>} generations that ended without a summary */
-  const generationFailed = new WeakMap()
-  /** @type {WeakMap<object, Set<string>>} tasks whose failed-generation record was already logged */
-  const rejectLogged = new WeakMap()
+  /** @type {WeakMap<object, SessionRuntime>} the only per-session state this module keeps */
+  const runtimes = new WeakMap()
   /** @type {'unknown' | 'yes' | 'no'} */
   let delegateSupport = 'unknown'
-  let boundary = 0
+  /** The boundary of the most recent pass; the test accessor below. */
+  let lastBoundary = 0
+
+  /**
+   * The session's runtime, created on first use. A weak key means a finished session's state is
+   * collected with it, exactly as the seven WeakMaps were.
+   *
+   * @param {any} session
+   * @returns {SessionRuntime}
+   */
+  function runtimeOf(session) {
+    let runtime = runtimes.get(session)
+    if (runtime === undefined) {
+      runtime = createSessionRuntime()
+      runtimes.set(session, runtime)
+    }
+    return runtime
+  }
+
+  /**
+   * Apply one transition. The runtime is read again here, not cached by the caller, so a background
+   * generation that settles across an `await` in a pass can never be overwritten by a stale copy.
+   *
+   * @param {any} session
+   * @param {Action} action
+   * @returns {{ runtime: SessionRuntime, changed: boolean }}
+   */
+  function apply(session, action) {
+    const current = runtimeOf(session)
+    const next = reduce(current, action)
+    if (next !== current) runtimes.set(session, next)
+    return { runtime: next, changed: next !== current }
+  }
+
+  /**
+   * @param {any} session
+   * @param {string} taskId
+   * @returns {import('./runtime/session-runtime.js').TaskRuntime|undefined}
+   */
+  function taskState(session, taskId) {
+    return taskRuntime(runtimeOf(session), taskId)
+  }
 
   /**
    * One boundary pass. Returns the pass outcome for tests: how many folds committed and whether
@@ -102,9 +146,9 @@ export function createFoldRunner(deps) {
     const session = agent.session
     /** @type {{ folded: number, busy: boolean, skipped: string[] }} */
     const report = { folded: 0, busy: false, skipped: [] }
-    if (inFlight.has(session)) return report
-    inFlight.add(session)
-    boundary += 1
+    if (runtimeOf(session).busy) return report
+    apply(session, { type: 'enter-pass' })
+    lastBoundary = apply(session, { type: 'boundary++' }).runtime.boundary
     try {
       const engine = await deps.engine()
       if (engine === null) return report
@@ -128,28 +172,31 @@ export function createFoldRunner(deps) {
         // Re-read the task: a fold committed for an inner task moved this one's cuts.
         let task = snap.state.tasks[entry.id]
         if (!task) continue
+        // A skip decided at an older surface version no longer applies (docs/10 §12).
+        apply(session, { type: 'unsplit-skip', taskId: entry.id, epoch: snap.epoch })
         // A generated summary for a task that can no longer fold is dead weight; drop it before it
         // shadows a later attempt.
-        if (task.status !== 'delegate' && pendingFor(session, task.id) !== undefined)
-          dropPending(session, task.id)
+        if (task.status !== 'delegate' && (taskState(session, entry.id)?.pending ?? null) !== null)
+          apply(session, { type: 'drop-pending', taskId: entry.id })
         if (task.status !== 'queued' && task.status !== 'delegate') {
-          takeGenerationFailure(session, task.id)
+          apply(session, { type: 'record-failure', taskId: entry.id, recorded: false })
           continue
         }
-        if (skippedFor(session, task.id, snap.epoch) !== undefined) {
-          takeGenerationFailure(session, task.id)
-          dropPending(session, task.id)
+        if (skipReason(taskState(session, entry.id), snap.epoch) !== undefined) {
+          apply(session, { type: 'record-failure', taskId: entry.id, recorded: false })
+          apply(session, { type: 'drop-pending', taskId: entry.id })
           continue
         }
-        if (takeGenerationFailure(session, task.id)) {
+        if (taskState(session, entry.id)?.failedGeneration === true) {
           // A generation ended without a summary. Record the failure durably at this boundary and
           // let the next boundary try again; it is never retried in this pass (docs/03 §5.4).
-          if (task.status === 'delegate') {
-            if (await recordFailure(agent, session, task, engine, signal)) snap = await reread()
-          }
+          const recorded =
+            task.status === 'delegate' ? await recordFailure(agent, session, task, engine, signal) : false
+          apply(session, { type: 'record-failure', taskId: entry.id, recorded })
+          if (recorded) snap = await reread()
           continue
         }
-        if (backingOff(session, task.id)) continue
+        if (backingOff(session, entry.id)) continue
         let outcome = await stepTask(agent, session, task, snap, engine, signal)
         if (outcome === 'busy') {
           // Another transaction holds the durable compaction lock, and such a transaction usually
@@ -165,19 +212,24 @@ export function createFoldRunner(deps) {
           if (outcome === 'busy') {
             // The lock is genuinely held: stop the pass and let the next boundary retry the task.
             report.busy = true
-            waitOnce(session, entry.id)
+            waitOnce(session, entry.id, snap.epoch)
             break
           }
         }
-        if (outcome === 'folded') report.folded += 1
+        if (outcome === 'folded') {
+          apply(session, { type: 'commit-folded', taskId: entry.id, epoch: snap.epoch })
+          report.folded += 1
+        }
         if (outcome === 'skipped') report.skipped.push(entry.id)
+        if (outcome === 'deferred')
+          apply(session, { type: 'commit-deferred', taskId: entry.id, epoch: snap.epoch })
         // A committed fold moves the outer tasks' cuts, so re-read the state before the next one.
         if (outcome === 'folded' || outcome === 'skipped') snap = await reread()
       }
-      prunePending(session, snap.state)
+      pruneTerminal(session, snap.state)
       return report
     } finally {
-      inFlight.delete(session)
+      apply(session, { type: 'leave-pass' })
     }
   }
 
@@ -211,21 +263,23 @@ export function createFoldRunner(deps) {
    * @param {AbortSignal | undefined} signal
    */
   function startDelegate(agent, session, due, snap, engine, signal) {
-    if (anyGenerationInFlight(session) || !delegateSupported()) return
+    if (runtimeOf(session).generation !== null || !delegateSupported()) return
     for (const dueTask of due) {
       const task = snap.state.tasks[dueTask.id]
       if (!task || task.status !== 'delegate') continue
-      if (pendingFor(session, task.id) !== undefined) continue
+      const runtime = taskState(session, task.id)
+      if ((runtime?.pending ?? null) !== null) continue
       // A failed generation is recorded durably before the task is retried, never instead of it.
-      if (generationInFailure(session, task.id)) continue
-      if (skippedFor(session, task.id, snap.epoch) !== undefined) continue
+      if (runtime?.failedGeneration === true) continue
+      if (runtime !== undefined && runtime.attempts >= MAX_TASK_ATTEMPTS) continue
+      if (skipReason(runtime, snap.epoch) !== undefined) continue
       if (backingOff(session, task.id)) continue
       // Never hand `start` a region the surface does not have: the generated text must describe
       // the span as it is now, and a task that can no longer fold must not be billed.
       const region = resolveRegion(task, snap.nodes)
       if (region.kind !== 'fold') continue
       if (!balanced(engine, session, region)) continue
-      startGeneration(agent, session, task, region, signal)
+      startGeneration(agent, session, task, region, snap.epoch, signal)
       return
     }
   }
@@ -235,9 +289,10 @@ export function createFoldRunner(deps) {
    * @param {any} session
    * @param {Task} task
    * @param {FoldRegion} region
+   * @param {number} epoch
    * @param {AbortSignal | undefined} signal
    */
-  function startGeneration(agent, session, task, region, signal) {
+  function startGeneration(agent, session, task, region, epoch, signal) {
     const delegate = deps.delegate
     if (delegate === undefined) return
     const regionKey = regionKeyOf(region, session.surface.nodes)
@@ -246,20 +301,12 @@ export function createFoldRunner(deps) {
     // Promise.resolve() defers start() by one microtask so the in-flight entry below exists even
     // when the generator throws synchronously; the rejection handler keeps the promise from
     // surfacing as an unhandled rejection.
-    const generation = Promise.resolve()
+    Promise.resolve()
       .then(() => delegate.start(agent, task, request, signal))
       .then(
         (result) => {
-          if (result === null) markGenerationFailed(session, task.id)
-          else
-            rememberPending(session, task.id, {
-              blocks: result.blocks,
-              ...(result.usage === undefined ? {} : { usage: result.usage }),
-              // The runner owns the key: it resolved the window, so a value echoed by the
-              // summarizer can never make a commit compare against a window it did not describe.
-              regionKey,
-            })
-          forgetGeneration(session, task.id)
+          if (result === null) settleGeneration(session, task.id, 'failed')
+          else settleGeneration(session, task.id, 'ok', result.blocks, result.usage)
         },
         (error) => {
           // A cancelled generation is not a failed attempt: the turn was interrupted, nothing was
@@ -267,18 +314,32 @@ export function createFoldRunner(deps) {
           // task simply waits for the next boundary.
           if (signal?.aborted === true) {
             log('warn', `task-folding: the delegate summary for ${task.id} was cancelled with the turn`)
-            forgetGeneration(session, task.id)
+            settleGeneration(session, task.id, 'cancelled')
             return
           }
           const message = error instanceof Error ? error.message : String(error)
           log('warn', `task-folding: no delegate summary for ${task.id}: ${message}`)
-          markGenerationFailed(session, task.id)
-          forgetGeneration(session, task.id)
+          settleGeneration(session, task.id, 'failed')
         },
       )
-    const map = generating.get(session) ?? new Map()
-    map.set(task.id, generation)
-    generating.set(session, map)
+    apply(session, { type: 'start-generation', taskId: task.id, epoch, regionKey })
+  }
+
+  /**
+   * @param {any} session
+   * @param {string} taskId
+   * @param {'ok' | 'failed' | 'cancelled'} outcome
+   * @param {any[]} [blocks]
+   * @param {any} [usage]
+   */
+  function settleGeneration(session, taskId, outcome, blocks, usage) {
+    apply(session, {
+      type: 'generation-finished',
+      taskId,
+      outcome,
+      ...(blocks === undefined ? {} : { blocks }),
+      ...(usage === undefined ? {} : { usage }),
+    })
   }
 
   /**
@@ -301,7 +362,7 @@ export function createFoldRunner(deps) {
     const region = resolveRegion(task, snap.nodes)
     if (region.kind !== 'fold') return noRegionOutcome(session, task, region, snap.epoch)
     if (!balanced(engine, session, region)) {
-      skipOnce(session, task.id, snap.epoch, 'region is not tool-pairing balanced')
+      skipTask(session, task.id, snap.epoch, 'region is not tool-pairing balanced')
       return 'skipped'
     }
     return 'deferred'
@@ -321,18 +382,18 @@ export function createFoldRunner(deps) {
     const region = resolveRegion(task, snap.nodes)
     if (region.kind !== 'fold') {
       // The span vanished or moved; the generated text can never describe it again.
-      dropPending(session, task.id)
+      apply(session, { type: 'drop-pending', taskId: task.id })
       return noRegionOutcome(session, task, region, snap.epoch)
     }
     if (regionKeyOf(region, snap.nodes) !== summary.regionKey) {
       // The region changed while the summary was generated (another fold, the pruner, an auto
       // compaction): drop the text and generate again at a later boundary.
-      dropPending(session, task.id)
+      apply(session, { type: 'drop-pending', taskId: task.id })
       return 'deferred'
     }
     if (!balanced(engine, session, region)) {
-      dropPending(session, task.id)
-      skipOnce(session, task.id, snap.epoch, 'region is not tool-pairing balanced')
+      apply(session, { type: 'drop-pending', taskId: task.id })
+      skipTask(session, task.id, snap.epoch, 'region is not tool-pairing balanced')
       return 'skipped'
     }
     try {
@@ -353,19 +414,18 @@ export function createFoldRunner(deps) {
         usage: prepared.usage,
         signal,
       })
-      dropPending(session, task.id)
       return 'folded'
     } catch (error) {
       const kind = engine.classify(error)
       if (kind === 'busy') return 'busy'
       if (kind === 'summary') {
-        dropPending(session, task.id)
-        skipOnce(session, task.id, snap.epoch, 'the host refused the fold as not smaller than the span')
+        apply(session, { type: 'drop-pending', taskId: task.id })
+        skipTask(session, task.id, snap.epoch, 'the host refused the fold as not smaller than the span')
         return 'skipped'
       }
       // Keep the text: an unexpected host failure is worth one more commit attempt, and
       // regenerating would bill the user again.
-      retryLater(session, task.id, error)
+      retryLater(session, task.id, error, snap.epoch)
       return 'deferred'
     }
   }
@@ -395,7 +455,7 @@ export function createFoldRunner(deps) {
     } catch (error) {
       // The host appends compaction/end{error} and then rethrows, so a rejection here is the
       // expected outcome; anything else cannot be retried without looping.
-      if (!rejectLoggedFor(session, task.id)) {
+      if (claimRejectLog(session, task.id)) {
         const message = error instanceof Error ? error.message : String(error)
         log('warn', `task-folding: could not record the failed delegate attempt for ${task.id}: ${message}`)
       }
@@ -414,11 +474,11 @@ export function createFoldRunner(deps) {
    */
   function noRegionOutcome(session, task, region, epoch) {
     if (region.kind === 'inconsistent') {
-      skipOnce(session, task.id, epoch, `region is inconsistent: ${region.reason}`)
+      skipTask(session, task.id, epoch, `region is inconsistent: ${region.reason}`)
       return 'skipped'
     }
     if (region.kind === 'absorbed') {
-      skipOnce(session, task.id, epoch, 'region was absorbed by another replacement')
+      skipTask(session, task.id, epoch, 'region was absorbed by another replacement')
       return 'skipped'
     }
     return 'deferred'
@@ -444,20 +504,24 @@ export function createFoldRunner(deps) {
   }
 
   /**
-   * Forget generated text for tasks that can no longer fold. A task that became terminal without
+   * Forget private state for tasks that can no longer fold. A task that became terminal without
    * being due again (an external compaction covered its span) would otherwise hold its blocks in
    * memory for the whole session.
    *
    * @param {any} session
    * @param {State} state
    */
-  function prunePending(session, state) {
-    const map = pending.get(session)
-    if (map === undefined) return
-    for (const taskId of [...map.keys()]) {
+  function pruneTerminal(session, state) {
+    /** @type {Set<string>} */
+    const waiting = new Set()
+    /** @type {Set<string>} */
+    const terminal = new Set()
+    for (const taskId of runtimeOf(session).tasks.keys()) {
       const task = state.tasks[taskId]
-      if (!task || (task.status !== 'queued' && task.status !== 'delegate')) map.delete(taskId)
+      if (task !== undefined && WAITING.has(task.status)) waiting.add(taskId)
+      else if (task === undefined || TERMINAL.has(task.status)) terminal.add(taskId)
     }
+    apply(session, { type: 'prune-terminal', waiting, terminal })
   }
 
   // The port owns the "never throws" guarantee (docs/10 §7); the runner only names the level.
@@ -473,69 +537,21 @@ export function createFoldRunner(deps) {
 
   /** @param {any} session @param {string} taskId @returns {PendingSummary | undefined} */
   function pendingFor(session, taskId) {
-    const map = pending.get(session)
-    return map === undefined ? undefined : map.get(taskId)
-  }
-
-  /** @param {any} session @param {string} taskId @param {PendingSummary} summary */
-  function rememberPending(session, taskId, summary) {
-    const map = pending.get(session) ?? new Map()
-    map.set(taskId, summary)
-    pending.set(session, map)
-  }
-
-  /** @param {any} session @param {string} taskId */
-  function dropPending(session, taskId) {
-    pending.get(session)?.delete(taskId)
-  }
-
-  /** @param {any} session @returns {boolean} */
-  function anyGenerationInFlight(session) {
-    const map = generating.get(session)
-    return map !== undefined && map.size > 0
-  }
-
-  /** @param {any} session @param {string} taskId */
-  function forgetGeneration(session, taskId) {
-    const map = generating.get(session)
-    if (map === undefined) return
-    map.delete(taskId)
-    if (map.size === 0) generating.delete(session)
-  }
-
-  /** @param {any} session @param {string} taskId */
-  function markGenerationFailed(session, taskId) {
-    const ids = generationFailed.get(session) ?? new Set()
-    ids.add(taskId)
-    generationFailed.set(session, ids)
+    return taskState(session, taskId)?.pending ?? undefined
   }
 
   /** @param {any} session @param {string} taskId @returns {boolean} */
-  function generationInFailure(session, taskId) {
-    const ids = generationFailed.get(session)
-    return ids !== undefined && ids.has(taskId)
-  }
-
-  /** @param {any} session @param {string} taskId @returns {boolean} */
-  function takeGenerationFailure(session, taskId) {
-    const ids = generationFailed.get(session)
-    if (ids === undefined || !ids.has(taskId)) return false
-    ids.delete(taskId)
-    if (ids.size === 0) generationFailed.delete(session)
-    return true
+  function backingOff(session, taskId) {
+    return isBackingOff(taskState(session, taskId), runtimeOf(session).boundary)
   }
 
   /**
    * @param {any} session
    * @param {string} taskId
-   * @returns {boolean} whether the record attempt was already logged for this task
+   * @returns {boolean} whether this call claimed the one-line record-failure explanation
    */
-  function rejectLoggedFor(session, taskId) {
-    const ids = rejectLogged.get(session) ?? new Set()
-    if (ids.has(taskId)) return true
-    ids.add(taskId)
-    rejectLogged.set(session, ids)
-    return false
+  function claimRejectLog(session, taskId) {
+    return apply(session, { type: 'claim-reject-log', taskId }).changed
   }
 
   /** @returns {boolean} whether this process can build the delegate summarizer */
@@ -567,12 +583,12 @@ export function createFoldRunner(deps) {
     const region = resolveRegion(task, snap.nodes)
     if (region.kind !== 'fold') return noRegionOutcome(session, task, region, snap.epoch)
     if (!balanced(engine, session, region)) {
-      skipOnce(session, task.id, snap.epoch, 'region is not tool-pairing balanced')
+      skipTask(session, task.id, snap.epoch, 'region is not tool-pairing balanced')
       return 'skipped'
     }
     const summary = summaryOf(session, task)
     if (summary === null || summary.trim() === '') {
-      skipOnce(session, task.id, snap.epoch, 'the task_end call carries no usable summary')
+      skipTask(session, task.id, snap.epoch, 'the task_end call carries no usable summary')
       return 'skipped'
     }
     const tokens = regionTokens(session, region)
@@ -581,7 +597,7 @@ export function createFoldRunner(deps) {
       tokens,
     })
     if (deps.estimator.text(nodeText) >= tokens) {
-      skipOnce(session, task.id, snap.epoch, `the fold node (~${tokens} tokens of span) would not be smaller`)
+      skipTask(session, task.id, snap.epoch, `the fold node (~${tokens} tokens of span) would not be smaller`)
       return 'skipped'
     }
     try {
@@ -607,10 +623,10 @@ export function createFoldRunner(deps) {
       const kind = engine.classify(error)
       if (kind === 'busy') return 'busy'
       if (kind === 'summary') {
-        skipOnce(session, task.id, snap.epoch, 'the host refused the fold as not smaller than the span')
+        skipTask(session, task.id, snap.epoch, 'the host refused the fold as not smaller than the span')
         return 'skipped'
       }
-      retryLater(session, task.id, error)
+      retryLater(session, task.id, error, snap.epoch)
       return 'deferred'
     }
   }
@@ -678,23 +694,10 @@ export function createFoldRunner(deps) {
    * @param {number} epoch
    * @param {string} reason
    */
-  function skipOnce(session, taskId, epoch, reason) {
-    const map = skipped.get(session) ?? new Map()
-    if (map.has(taskId)) return
-    map.set(taskId, { epoch, reason })
-    skipped.set(session, map)
-    log('warn', `task-folding: folding ${taskId} is skipped at surface version ${epoch}: ${reason}`)
-  }
-
-  /**
-   * @param {any} session
-   * @param {string} taskId
-   * @param {number} epoch
-   * @returns {string | undefined}
-   */
-  function skippedFor(session, taskId, epoch) {
-    const entry = skipped.get(session)?.get(taskId)
-    return entry !== undefined && entry.epoch === epoch ? entry.reason : undefined
+  function skipTask(session, taskId, epoch, reason) {
+    const { changed } = apply(session, { type: 'skip', taskId, epoch, reason })
+    if (changed)
+      log('warn', `task-folding: folding ${taskId} is skipped at surface version ${epoch}: ${reason}`)
   }
 
   /**
@@ -704,37 +707,29 @@ export function createFoldRunner(deps) {
    *
    * @param {any} session
    * @param {string} taskId
+   * @param {number} epoch
    */
-  function waitOnce(session, taskId) {
-    const ids = waiting.get(session) ?? new Set()
-    if (ids.has(taskId)) return
-    ids.add(taskId)
-    waiting.set(session, ids)
-    log('warn', `task-folding: folding ${taskId} waits: the compaction lock is held by another compaction`)
-  }
-
-  /** @param {any} session @param {string} taskId */
-  function backingOff(session, taskId) {
-    const record = backoff.get(session)?.get(taskId)
-    return record !== undefined && record.until > boundary
+  function waitOnce(session, taskId, epoch) {
+    const { changed } = apply(session, { type: 'commit-busy', taskId, epoch })
+    if (changed)
+      log('warn', `task-folding: folding ${taskId} waits: the compaction lock is held by another compaction`)
   }
 
   /**
    * @param {any} session
    * @param {string} taskId
    * @param {unknown} error
+   * @param {number} epoch
    */
-  function retryLater(session, taskId, error) {
-    const map = backoff.get(session) ?? new Map()
-    const record = map.get(taskId) ?? { failures: 0, until: boundary }
-    record.failures += 1
-    record.until = boundary + Math.min(2 ** (record.failures - 1), MAX_BACKOFF_BOUNDARIES)
-    map.set(taskId, record)
-    backoff.set(session, map)
+  function retryLater(session, taskId, error, epoch) {
+    const { runtime, changed } = apply(session, { type: 'retry', taskId, epoch })
+    if (!changed) return
+    const task = taskRuntime(runtime, taskId)
+    if (task === undefined || task.retryAfter === null) return
     const message = error instanceof Error ? error.message : String(error)
     log(
       'warn',
-      `task-folding: folding ${taskId} failed (attempt ${record.failures}), retrying in ${record.until - boundary} boundaries: ${message}`,
+      `task-folding: folding ${taskId} failed (attempt ${task.retries}), retrying in ${task.retryAfter - runtime.boundary} boundaries: ${message}`,
     )
   }
 
@@ -778,7 +773,7 @@ export function createFoldRunner(deps) {
     },
     /** Exposed for tests: one boundary pass. */
     pass,
-    /** Exposed for tests: the current boundary counter. */
-    boundary: () => boundary,
+    /** Exposed for tests: the boundary counter of the most recent pass. */
+    boundary: () => lastBoundary,
   }
 }

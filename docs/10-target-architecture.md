@@ -396,12 +396,12 @@ Each step is independently releasable and each keeps the live suite green:
 | 1 | `ports/logger.js`, `ports/clock.js`; every runner log goes through the port | T3 logger | none | **done** (`9b74d0d`) |
 | 2 | `SurfaceSnapshot` with `surfaceEpoch` in the projection, threaded through the scheduler | groundwork | low | **done** (`9b74d0d`) |
 | 3 | Epoch-bound snapshots replace the stale reads; a skip is keyed by the epoch it was decided at | **F9**, M5 region-key defect | medium | **done** (`9b74d0d`; `test/f9-surface-epoch.test.js` is the acceptance test) |
-| 4 | Fold the seven WeakMaps into `SessionRuntime` with a pure `reduce`; property-test the transitions | structural debt | medium | next |
+| 4 | Fold the seven WeakMaps into `SessionRuntime` with a pure `reduce`; property-test the transitions | structural debt | medium | **done** (`test/runtime.test.js`, reducer at 100 % lines / 98 % branches) |
 | 5 | `FoldRequest`/`SummaryResult` objects; `usage` and `source` in the contract | M5 usage, audit clarity | low | **done** |
 | 6 | `engine-adapter` split into `ports/compaction.js` + `ports/compaction-shim.js` + `compaction-native.js` stub; the adapter file is deleted | host boundary | low | **done** |
 | 7 | One `plugin/pre-step.js` orchestrator; the empty-span hint (Q15); generated client locale | Q15 hint, F7 groundwork | low | **done** |
 
-Steps 1–3 and 5–7 are implemented; step 4 is the remaining one. Step 3 was first because it closes the
+All seven steps are implemented. Step 3 was first because it closes the
 only known behavioural defect (F9), and it is what makes step 4's transitions testable: the runtime's
 `reduce` compares epochs, so "commit after the surface moved" is a legal transition rather than a race.
 

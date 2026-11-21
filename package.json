@@ -59,7 +59,7 @@
     "contract": "node scripts/contract-check.js",
     "pack:check": "node scripts/check-pack.js",
     "locale:gen": "node scripts/gen-locale.js",
-    "coverage": "node --test --experimental-test-coverage \"--test-coverage-include=host/*.js\" --test-coverage-branches=85 --test-coverage-lines=90 --test-coverage-functions=80 \"test/**/*.test.js\"",
+    "coverage": "node --test --experimental-test-coverage \"--test-coverage-include=host/**/*.js\" --test-coverage-branches=85 --test-coverage-lines=90 --test-coverage-functions=80 \"test/**/*.test.js\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",

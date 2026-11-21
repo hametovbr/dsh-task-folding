@@ -269,10 +269,11 @@ test('a host package without the expected exports yields null', async () => {
   assert.equal(port, null)
 })
 
-test('the native stub has the same contract but refuses to be built', () => {
+test('the native stub has the same contract but refuses to be used', () => {
   // docs/10 §15: the public host API does not exist yet, so selecting this implementation would
-  // silently disable folds. It has to fail loudly, and ports/compaction.js never selects it.
-  assert.throws(() => new NativeCompactionPort(), {
+  // silently disable folds. Every operation fails loudly; ports/compaction.js never selects it.
+  const port = new NativeCompactionPort()
+  assert.throws(() => port.balancedBefore(/** @type {any} */ ({}), 1), {
     message: 'compaction-native: no public host API yet',
   })
 })

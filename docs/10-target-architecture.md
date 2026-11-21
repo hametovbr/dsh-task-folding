@@ -391,18 +391,19 @@ port, so the ask is a swap, not a rewrite:
 
 Each step is independently releasable and each keeps the live suite green:
 
-| Step | Change | Fixes | Risk |
-|---|---|---|---|
-| 1 | Extract `ports/logger.js`, `ports/clock.js`, `ports/host-services.js`; delete the raw `deps.logger` uses | T3 logger | none (delegation only) |
-| 2 | Introduce `SurfaceSnapshot` with `epoch` in the projection; pass it through `planner`/`scheduler` without changing commit logic | groundwork | low; golden journals unchanged |
-| 3 | Replace `regionKey` and the direct surface reads with epoch-bound snapshots in the scheduler | **F9**, M5 region-key defect | medium; the race tests from T4 must flip from "pinned defect" to "folds at the next boundary" |
-| 4 | Fold the seven WeakMaps into `SessionRuntime` with a pure `reduce`; property-test the transitions | structural debt | medium; runner tests become transition tests |
-| 5 | Replace `foldRegion(...7 args)` with `FoldRequest`; `usage` and `source` in the contract | M5 usage, audit clarity | low |
-| 6 | Split `engine-adapter` into the port and the shim; add the native stub | host boundary | low |
-| 7 | Merge the two pre-step handlers into `plugin/pre-step.js`; add the empty-span hint; generate the locale | Q15 hint, F7 groundwork | low |
+| Step | Change | Fixes | Risk | State |
+|---|---|---|---|---|
+| 1 | `ports/logger.js`, `ports/clock.js`; every runner log goes through the port | T3 logger | none | **done** (`9b74d0d`) |
+| 2 | `SurfaceSnapshot` with `surfaceEpoch` in the projection, threaded through the scheduler | groundwork | low | **done** (`9b74d0d`) |
+| 3 | Epoch-bound snapshots replace the stale reads; a skip is keyed by the epoch it was decided at | **F9**, M5 region-key defect | medium | **done** (`9b74d0d`; `test/f9-surface-epoch.test.js` is the acceptance test) |
+| 4 | Fold the seven WeakMaps into `SessionRuntime` with a pure `reduce`; property-test the transitions | structural debt | medium | next |
+| 5 | `FoldRequest`/`SummaryResult` objects; `usage` and `source` in the contract | M5 usage, audit clarity | low | **done** |
+| 6 | `engine-adapter` split into `ports/compaction.js` + `ports/compaction-shim.js` + `compaction-native.js` stub; the adapter file is deleted | host boundary | low | **done** |
+| 7 | One `plugin/pre-step.js` orchestrator; the empty-span hint (Q15); generated client locale | Q15 hint, F7 groundwork | low | **done** |
 
-Order matters: step 3 before 4, because the epoch is what makes the runtime's transitions testable;
-step 5 before 6, because the port's request object is the contract the shim will implement.
+Steps 1–3 and 5–7 are implemented; step 4 is the remaining one. Step 3 was first because it closes the
+only known behavioural defect (F9), and it is what makes step 4's transitions testable: the runtime's
+`reduce` compares epochs, so "commit after the surface moved" is a legal transition rather than a race.
 
 ## 17. Acceptance
 

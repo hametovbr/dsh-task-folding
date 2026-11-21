@@ -6,9 +6,10 @@
 //
 // Two host packages decide what the mount path can reach, and neither is installed in this
 // repository:
-//   - `@deepseek-ai/dsh-compaction-basic` / `@deepseek-ai/dsh-compaction`: engine-adapter.js takes
-//     a loader as a documented test seam (`createFoldEngine(ctx, { loader })`) and caches the
-//     engine per process, so a test primes the cache with a fake and apply() then reuses it.
+//   - `@deepseek-ai/dsh-compaction-basic` / `@deepseek-ai/dsh-compaction`:
+//     host/ports/compaction.js takes a loader as a documented test seam
+//     (`createCompactionPort(ctx, { loader })`) and caches the engine per process, so a test
+//     primes the cache with a fake and apply() then reuses it.
 //   - `@deepseek-ai/dsh-llm`: host/index.js passes the *module-level* `loadHostModule` to
 //     generateDelegateSummary, so there is no argument seam. The only way to stand a host package
 //     in without editing host/ is to resolve it the way a real installation would: the loader hook
@@ -18,7 +19,7 @@
 // run for real.
 //
 // What this file cannot reach without editing host/:
-//   - host/index.js:121, the engine promise's rejection handler: createFoldEngine() resolves null
+//   - host/index.js:121, the engine promise's rejection handler: createCompactionPort() resolves null
 //     on every failure and never rejects, so apply() cannot observe a rejection there.
 //   - the Config branch of the plugin object (host/index.js:54): it needs @deepseek-ai/schemastery
 //     resolved by the module-level top-level await, before a loader hook could be registered, and
@@ -33,7 +34,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { createFoldEngine, resetFoldEngine } from '../host/engine-adapter.js'
+import { createCompactionPort, resetCompactionPort } from '../host/ports/compaction.js'
 import plugin, { DELEGATE_MAX_TOKENS, PLUGIN_NAME, PROMPT_ORDER } from '../host/index.js'
 import { PROJECTION_KEY, STATE_VERSION, initialState } from '../host/projection.js'
 import { loadHostModule, loadSchemastery, runtimeModulesDir } from '../host/resolve.js'
@@ -215,9 +216,9 @@ function fakeContext(options = {}) {
 }
 
 /**
- * A fake engine-adapter dependency set. `foldRegion` records the prepared blocks, route and usage
- * the runner hands over; `rejectRegion` records the durable failed-attempt write and fails the
- * way the host's transaction does.
+ * A fake compaction-port dependency set. `fold` records the prepared blocks, route and usage the
+ * runner hands over; `reject` records the durable failed-attempt write and fails the way the host's
+ * transaction does.
  *
  * @param {{ commits: any[], failures: any[] }} record
  * @returns {(spec: string) => Promise<any>}
@@ -273,8 +274,8 @@ function mount(options = {}) {
   const record = { commits: [], failures: [] }
   const fake = fakeContext(options)
   if (options.state !== undefined) fake.setState(options.state)
-  resetFoldEngine()
-  const engine = createFoldEngine(fake.ctx, { loader: compactionLoader(record) })
+  resetCompactionPort()
+  const engine = createCompactionPort(fake.ctx, { loader: compactionLoader(record) })
   plugin.apply(fake.ctx, options.config ?? {})
   return { fake, record, engine }
 }
@@ -495,8 +496,8 @@ test('a registration failure that is not an Error is reported as text', () => {
   /** @type {{ commits: any[], failures: any[] }} */
   const record = { commits: [], failures: [] }
   const fake = fakeContext({ toolsFail: 'the tool sink is gone' })
-  resetFoldEngine()
-  createFoldEngine(fake.ctx, { loader: compactionLoader(record) })
+  resetCompactionPort()
+  createCompactionPort(fake.ctx, { loader: compactionLoader(record) })
   plugin.apply(fake.ctx, {})
 
   assert.deepEqual(fake.tools, [])

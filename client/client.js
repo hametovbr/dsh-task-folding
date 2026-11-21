@@ -29,38 +29,11 @@ window.__ModuleLoader__.load({
     /** Ascending order beside the shipped docks: after todo (0) and goal (10), before the attached queue panel (20). */
     const DOCK_ORDER = 15
 
-    /** English copy; mirrors the `client` section of locale/en.json key for key. */
-    const en = {
-      'dock.label': 'Open and recently folded tasks',
-      'dock.folding': '{n} folding',
-      'settings.label': 'Task folding settings',
-      'settings.unavailable': 'Task folding settings are not available in this deployment.',
-      'settings.readOnly': 'This deployment keeps plugin settings read-only.',
-      'settings.notSaved': 'The Host did not accept that value.',
-      'settings.fields.minSpanTokens.label': 'Minimum fold size',
-      'settings.fields.minSpanTokens.description':
-        'A closed task smaller than this many tokens is never folded.',
-      'settings.fields.delegateEnabled.label': 'Automatic summaries',
-      'settings.fields.delegateEnabled.description':
-        'Summarize a task automatically when its own summary is missing or unusable.',
-      'settings.fields.minSummaryChars.label': 'Minimum summary length',
-      'settings.fields.minSummaryChars.description':
-        'A task summary shorter than this is treated as missing.',
-      'settings.fields.maxSummaryRatio.label': 'Maximum summary share',
-      'settings.fields.maxSummaryRatio.description':
-        'A task summary larger than this share of the task is treated as unusable.',
-      'settings.fields.staleTaskSteps.label': 'Stale-task reminder',
-      'settings.fields.staleTaskSteps.description':
-        'Remind the model about a task that stays open for this many steps.',
-      'settings.fields.showTaskBar.label': 'Task bar',
-      'settings.fields.showTaskBar.description': 'Show open and folding tasks above the composer.',
-      'settings.fields.summarizationProvider.label': 'Summary provider',
-      'settings.fields.summarizationProvider.description':
-        'Provider for automatic summaries; empty uses the session route.',
-      'settings.fields.summarizationModel.label': 'Summary model',
-      'settings.fields.summarizationModel.description':
-        'Model for automatic summaries; set together with the provider.',
-    }
+    /** English copy, generated from `locale/en.json` by `npm run locale:gen` (docs/10 §11). This file
+     * is a classic loader script served as one bundle, so it cannot `import` the generated module;
+     * the host serves that module as a package-local chunk and the loader fetches it with
+     * `require.async`. The dictionary is not duplicated here: the generated file is the copy. */
+    const DICTIONARY = require.async('./client.locale.generated.js')
 
     /** The Host's Config fields (host/settings.js FIELDS); the card renders every one of them. */
     const SETTINGS_FIELDS = [
@@ -452,7 +425,10 @@ window.__ModuleLoader__.load({
 
     return {
       inject: ['slots', 'locale'],
-      apply(ctx) {
+      async apply(ctx) {
+        // The dictionary is a package-local chunk, so it arrives as a promise: the plugin's own
+        // activation waits for it once, and the locale is registered only with the packaged copy.
+        const { en } = await DICTIONARY
         ctx.effect(() => ctx.locale.register(NS, { en }), 'task-folding: UI dictionaries')
 
         // The Host configuration form of this bundle's row, once the Client settings service serves

@@ -39,28 +39,17 @@ function successEngine(sim) {
   const calls = []
   return {
     calls,
-    /**
-     * @param {any} agent
-     * @param {number} start
-     * @param {number} end
-     * @param {any[]} blocks
-     * @param {any} route
-     * @param {AbortSignal | undefined} signal
-     * @param {any} [usage]
-     */
-    async foldRegion(agent, start, end, blocks, route, signal, usage) {
-      calls.push({ agent, start, end, blocks, route, signal, usage })
-      sim.compact(start, end)
-      return { start, end }
+    /** @param {any} request */
+    async fold(request) {
+      const { agent, region, blocks, route, signal, usage } = request
+      calls.push({ agent, start: region.startSeq, end: region.endSeq, blocks, route, signal, usage })
+      sim.compact(region.startSeq, region.endSeq)
+      return { start: region.startSeq, end: region.endSeq }
     },
     balancedBefore: () => true,
     balancedAfter: () => true,
-    /**
-     * @param {any} _agent
-     * @param {number} _start
-     * @param {number} _end
-     */
-    async rejectRegion(_agent, _start, _end) {
+    /** @param {any} _request */
+    async reject(_request) {
       throw new Error('this test never records a failed delegate generation')
     },
     /** @returns {'busy' | 'summary' | 'other'} */
@@ -71,7 +60,7 @@ function successEngine(sim) {
 /** @param {Sim} sim @param {Error} error @param {'busy' | 'summary' | 'other'} kind */
 function failingEngine(sim, error, kind) {
   const engine = successEngine(sim)
-  engine.foldRegion = async () => {
+  engine.fold = async () => {
     engine.calls.push({ error })
     throw error
   }
@@ -90,31 +79,19 @@ function busyOnceEngine(sim) {
   let busy = true
   return {
     calls: success.calls,
-    /**
-     * @param {any} agent
-     * @param {number} start
-     * @param {number} end
-     * @param {any[]} blocks
-     * @param {any} route
-     * @param {AbortSignal | undefined} signal
-     */
-    /** @param {any} agent @param {number} start @param {number} end @param {any[]} blocks @param {any} route @param {AbortSignal | undefined} signal @param {any} [usage] */
-    async foldRegion(agent, start, end, blocks, route, signal, usage) {
+    /** @param {any} request */
+    async fold(request) {
       if (busy) {
         busy = false
         success.calls.push({ busy: true })
         throw new Error('busy')
       }
-      return success.foldRegion(agent, start, end, blocks, route, signal, usage)
+      return success.fold(request)
     },
     balancedBefore: success.balancedBefore,
     balancedAfter: success.balancedAfter,
-    /**
-     * @param {any} _agent
-     * @param {number} _start
-     * @param {number} _end
-     */
-    async rejectRegion(_agent, _start, _end) {
+    /** @param {any} _request */
+    async reject(_request) {
       throw new Error('this test never records a failed delegate generation')
     },
     /** @param {unknown} error @returns {'busy' | 'other'} */
@@ -270,8 +247,8 @@ async function nestedDelegateTask() {
 }
 
 /**
- * A success engine whose `rejectRegion` records the failure the way the host does: a zero-cost
- * failed compaction that is then rethrown.
+ * A success engine whose `reject` records the failure the way the host does: a zero-cost failed
+ * compaction that is then rethrown.
  *
  * @param {Sim} sim
  */
@@ -281,18 +258,14 @@ function rejectEngine(sim) {
   const rejects = []
   return {
     calls: success.calls,
-    foldRegion: success.foldRegion,
+    fold: success.fold,
     balancedBefore: success.balancedBefore,
     balancedAfter: success.balancedAfter,
     classify: success.classify,
     rejects,
-    /**
-     * @param {any} _agent
-     * @param {number} start
-     * @param {number} end
-     * @param {AbortSignal | undefined} _signal
-     */
-    async rejectRegion(_agent, start, end, _signal) {
+    /** @param {any} request */
+    async reject(request) {
+      const { startSeq: start, endSeq: end } = request.region
       rejects.push({ start, end })
       sim.failCompaction()
       throw new Error('the summary is unavailable')
@@ -445,7 +418,7 @@ test('a busy lock another compaction wins neither stops the pass nor logs', asyn
   await h.batch([{ name: 'task_end', args: { summary: SUMMARY } }])
 
   const engine = failingEngine(sim, new Error('busy'), 'busy')
-  engine.foldRegion = async () => {
+  engine.fold = async () => {
     engine.calls.push({ busy: true })
     // The competing transaction commits the whole span before the retry gets its turn.
     sim.fold('T1')
@@ -663,8 +636,8 @@ test('a failing pass is logged and never breaks the boundary', async () => {
       throw new Error('projection unavailable')
     },
     engine: async () => ({
-      foldRegion: async () => ({}),
-      rejectRegion: async () => ({}),
+      fold: async () => ({}),
+      reject: async () => ({}),
       balancedBefore: () => true,
       balancedAfter: () => true,
       classify: () => 'other',
@@ -893,23 +866,16 @@ test('a pass that folds a queued task first never hands a stale region to start'
   const sim = await nestedDelegateTask()
   const ctl = delegateOf()
   const engine = successEngine(sim)
-  const fold = engine.foldRegion
+  const fold = engine.fold
   /** @type {number[]} */
   const startsAtCommit = []
   // The host's compaction transaction commits asynchronously: yield before applying the
   // replacement. Phase 1 has already started the generation against the current surface, so the
   // later fold must not be preceded by another start.
-  engine.foldRegion = async (
-    /** @type {any} */ agent,
-    /** @type {number} */ start,
-    /** @type {number} */ end,
-    /** @type {any[]} */ blocks,
-    /** @type {any} */ route,
-    /** @type {AbortSignal | undefined} */ signal,
-  ) => {
+  engine.fold = async (/** @type {any} */ request) => {
     await Promise.resolve()
     startsAtCommit.push(ctl.starts.length)
-    return fold(agent, start, end, blocks, route, signal, undefined)
+    return fold(request)
   }
   const { runner } = runnerOf(sim, { engine, delegate: ctl.delegate })
   const agent = agentOf(sim)

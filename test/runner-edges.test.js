@@ -44,24 +44,18 @@ function successEngine(sim) {
   const calls = []
   return {
     calls,
-    /**
-     * @param {any} _agent
-     * @param {number} start
-     * @param {number} end
-     * @param {any[]} blocks
-     * @param {any} _route
-     * @param {AbortSignal | undefined} _signal
-     * @param {any} [_usage]
-     */
-    async foldRegion(_agent, start, end, blocks, _route, _signal, _usage) {
+    /** @param {any} request */
+    async fold(request) {
+      const { region, blocks } = request
+      const { startSeq: start, endSeq: end } = region
       calls.push({ start, end, blocks })
       sim.compact(start, end)
       return { start, end }
     },
     balancedBefore: () => true,
     balancedAfter: () => true,
-    /** @param {any} _agent @param {number} _start @param {number} _end */
-    async rejectRegion(_agent, _start, _end) {
+    /** @param {any} _request */
+    async reject(_request) {
       throw new Error('this test never records a failed delegate generation')
     },
     /** @returns {'busy' | 'summary' | 'other'} */
@@ -280,7 +274,7 @@ test('the before and after tool-pairing edges cannot be told apart in the skip r
 test('an unexpected failure backs off 1, 2, 4 and then caps at MAX_BACKOFF_BOUNDARIES', async () => {
   const sim = await queuedTask()
   const engine = engineWith(sim)
-  engine.foldRegion = async () => {
+  engine.fold = async () => {
     engine.calls.push({ start: 0, end: 0, blocks: [] })
     throw new Error('boom')
   }
@@ -318,22 +312,16 @@ test('an unexpected failure backs off 1, 2, 4 and then caps at MAX_BACKOFF_BOUND
 test('a successful fold after backoff ends the retries for good', async () => {
   const sim = await queuedTask()
   const engine = engineWith(sim)
-  const success = engine.foldRegion
+  const success = engine.fold
   let attempts = 0
-  engine.foldRegion = async (
-    /** @type {any} */ agent,
-    /** @type {number} */ start,
-    /** @type {number} */ end,
-    /** @type {any[]} */ blocks,
-    /** @type {any} */ route,
-    /** @type {AbortSignal | undefined} */ signal,
-  ) => {
+  engine.fold = async (request) => {
+    const { startSeq: start, endSeq: end } = request.region
     attempts += 1
     if (attempts <= 2) {
-      engine.calls.push({ start, end, blocks })
+      engine.calls.push({ start, end, blocks: request.blocks })
       throw new Error('boom')
     }
-    return success(agent, start, end, blocks, route, signal, undefined)
+    return success(request)
   }
   const { runner, logs } = runnerOf(sim, { engine })
   const agent = agentOf(sim)
@@ -366,7 +354,7 @@ test('a successful fold after backoff ends the retries for good', async () => {
 test('a held lock is explained once for the process, not once per pass', async () => {
   const sim = await queuedTask()
   const engine = engineWith(sim)
-  engine.foldRegion = async () => {
+  engine.fold = async () => {
     engine.calls.push({ start: 0, end: 0, blocks: [] })
     throw new Error('the compaction lock is held')
   }
@@ -522,7 +510,7 @@ test('a host refusal at commit drops the pending text and skips the task', async
   const ctl = delegateOf()
   const engine = engineWith(sim)
   let attempts = 0
-  engine.foldRegion = async () => {
+  engine.fold = async () => {
     attempts += 1
     throw new Error('summary is not smaller than the shadowed content')
   }
@@ -547,9 +535,9 @@ test('a busy commit keeps the generated text and retries it at the next boundary
   const sim = await delegateTask()
   const ctl = delegateOf()
   const engine = engineWith(sim)
-  const success = engine.foldRegion
+  const success = engine.fold
   let attempts = 0
-  engine.foldRegion = async () => {
+  engine.fold = async () => {
     attempts += 1
     throw new Error('the compaction lock is held')
   }
@@ -568,7 +556,7 @@ test('a busy commit keeps the generated text and retries it at the next boundary
   assert.match(member(logs, 0), /waits: the compaction lock is held/)
 
   // The lock is released: the same generated blocks are committed, without regeneration.
-  engine.foldRegion = success
+  engine.fold = success
   const region = member(ctl.starts, 0).region
   const folded = await runner.pass(agent, undefined, true)
   assert.deepEqual(folded, { folded: 1, busy: false, skipped: [] })
@@ -582,9 +570,9 @@ test('an unexpected commit failure keeps the text and retries it on the backoff'
   const sim = await delegateTask()
   const ctl = delegateOf()
   const engine = engineWith(sim)
-  const success = engine.foldRegion
+  const success = engine.fold
   let failures = 0
-  engine.foldRegion = async () => {
+  engine.fold = async () => {
     failures += 1
     throw new Error('the transaction could not start')
   }
@@ -609,7 +597,7 @@ test('an unexpected commit failure keeps the text and retries it on the backoff'
   ])
   assert.equal(ctl.starts.length, 1, 'the failure never bills a new generation')
 
-  engine.foldRegion = success
+  engine.fold = success
   const folded = await runner.pass(agent, undefined, true) // boundary 5: the retry commits
   assert.deepEqual(folded, { folded: 1, busy: false, skipped: [] })
   assert.equal(sim.state.tasks.T1?.status, 'folded')
@@ -727,12 +715,8 @@ test('a pending summary whose region moved under it is dropped as inconsistent',
   const ctl = delegateOf()
   const engine = engineWith(sim)
   let queuedAttempts = 0
-  engine.foldRegion = async (
-    /** @type {any} */ _agent,
-    /** @type {number} */ start,
-    /** @type {number} */ end,
-    /** @type {any[]} */ _blocks,
-  ) => {
+  engine.fold = async (request) => {
+    const { startSeq: start, endSeq: end } = request.region
     if (sim.state.tasks.T1?.status === 'queued') {
       queuedAttempts += 1
       engine.calls.push({ start: 0, end: 0, blocks: [] })

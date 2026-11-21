@@ -119,6 +119,22 @@ export function renderStaleTaskHint(id, title, bucket) {
   )
 }
 
+/**
+ * The hint for a task that closed below the floor because its whole span was the closing message:
+ * `task_begin` shared the assistant message with the first work calls (docs/07 Q15, docs/10 §10).
+ * One sentence, in the voice of the stale hint; the title is JSON-escaped like there, so the text
+ * stays one line and the quoted title cannot end early.
+ *
+ * @param {string} id
+ * @param {string} title
+ */
+export function renderEmptySpanHint(id, title) {
+  return (
+    `Task ${id} ${JSON.stringify(title)} closed below the fold floor because task_begin shared its ` +
+    'message with the work it covers; call task_begin in its own message next time.'
+  )
+}
+
 // ---------------------------------------------------------------------------
 // fold_recall reads (docs/03 §6.3): the span index, the exact range and grep
 

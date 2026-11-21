@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
-import { bucketFor, hintKeyFor, maybeHint } from '../host/hints.js'
+import { bucketFor, emptySpanKeyFor, hintKeyFor, isEmptySpan, maybeHint } from '../host/hints.js'
 import * as texts from '../host/texts.js'
 import { Sim } from './fixtures/sim.js'
 import { harnessOf } from './fixtures/tools.js'
@@ -30,6 +30,39 @@ async function openTask(options = {}) {
 /** @param {Sim} sim @param {number} count */
 function say(sim, count) {
   for (let i = 0; i < count; i += 1) sim.say()
+}
+
+/**
+ * The Q15 shape (docs/07 Q15): the model puts `task_begin` in the same assistant message as its
+ * first work calls, so the begin batch closes after that work and the task's whole span is the
+ * closing message. The real `task_end` tool computes the verdict, so the fake meter's 1,000 tokens
+ * against the 2,000-token floor make it `below-floor`.
+ *
+ * @param {{ title?: string, settings?: object }} [options]
+ * @returns {Promise<{ sim: Sim, h: ReturnType<typeof harnessOf> }>}
+ */
+async function packedBegin(options = {}) {
+  const sim = new Sim()
+  const h = harnessOf(sim, options.settings === undefined ? {} : { settings: options.settings })
+  sim.batch([{ kind: 'begin', title: options.title ?? 'Review the redirect' }, { kind: 'other' }])
+  await h.batch([{ name: 'task_end', args: { summary: '## Done\nRead the redirect.' } }])
+  return { sim, h }
+}
+
+/**
+ * A below-floor task whose span does hold work: `task_begin` on its own, a work message, then the
+ * close. The huge floor keeps the verdict `below-floor` whatever the fake meter measures.
+ *
+ * @param {{ title?: string }} [options]
+ * @returns {Promise<{ sim: Sim, h: ReturnType<typeof harnessOf> }>}
+ */
+async function smallTaskWithWork(options = {}) {
+  const sim = new Sim()
+  const h = harnessOf(sim, { settings: { minSpanTokens: 1_000_000 } })
+  sim.batch([{ kind: 'begin', title: options.title ?? 'Small but real' }])
+  sim.batch([{ kind: 'other' }])
+  await h.batch([{ name: 'task_end', args: { summary: '## Done\nDid something small.' } }])
+  return { sim, h }
 }
 
 /**
@@ -231,6 +264,98 @@ test('the hint text names the bucket and nothing else about the age', () => {
 })
 
 // ---------------------------------------------------------------------------
+// The empty-span rule (docs/07 Q15, docs/10 §10)
+
+test('a task whose begin batch swallowed the work is hinted at closing', async () => {
+  const { sim, h } = await packedBegin({ title: 'Review the redirect' })
+  const task = sim.state.tasks.T1
+  assert.ok(task)
+  // The condition the rule reads, straight from the projection: the begin batch closed after the
+  // work, so the first surface node of the span is the assistant message that carried task_end.
+  assert.equal(task.verdict, 'below-floor')
+  assert.equal(task.status, 'below-floor')
+  assert.equal(task.spanStart, task.endMsgSeq)
+  assert.equal(isEmptySpan(task), true)
+
+  const hint = maybeHint(sim.state, h.settings)
+  assert.ok(hint)
+  assert.equal(hint.key, 'T1:empty-span')
+  assert.deepEqual(hint.message.source, { kind: 'task-folding:hint', key: 'T1:empty-span' })
+  assert.deepEqual(hint.message.content, [
+    { type: 'text', text: texts.renderEmptySpanHint('T1', 'Review the redirect') },
+  ])
+  // One sentence, in the voice of the stale hint, quoting the title the same way.
+  assert.equal(
+    textOf(hint),
+    'Task T1 "Review the redirect" closed below the fold floor because task_begin shared its message with the work it covers; call task_begin in its own message next time.',
+  )
+
+  // At most once per task: the durable latch stores the key, and the next boundary is silent.
+  assert.equal(maybeHint({ ...sim.state, hintKey: hint.key }, h.settings), null)
+  // Another task's key does not latch this one, exactly as the age hint behaves.
+  assert.deepEqual(maybeHint({ ...sim.state, hintKey: 'T9:empty-span' }, h.settings), hint)
+})
+
+test('the empty-span key is pinned', () => {
+  assert.equal(emptySpanKeyFor('T7'), 'T7:empty-span')
+  assert.equal(emptySpanKeyFor('T12'), 'T12:empty-span')
+})
+
+test('a small task that did work inside its span is left alone', async () => {
+  const { sim, h } = await smallTaskWithWork()
+  const task = sim.state.tasks.T1
+  assert.ok(task)
+  assert.equal(task.verdict, 'below-floor', 'still below the floor, so the age rule is not what matters')
+  assert.ok(/** @type {number} */ (task.spanStart) < /** @type {number} */ (task.endMsgSeq))
+  assert.equal(isEmptySpan(task), false)
+  assert.equal(maybeHint(sim.state, h.settings), null, 'no hint: the begin batch did not swallow the work')
+})
+
+test('the most recently closed empty-span task is the one the hint names', async () => {
+  const { sim, h } = await packedBegin({ title: 'first' })
+  sim.batch([{ kind: 'begin', title: 'second' }, { kind: 'other' }])
+  await h.batch([{ name: 'task_end', args: { summary: '## Done\nSecond.' } }])
+  assert.equal(isEmptySpan(/** @type {any} */ (sim.state.tasks.T2)), true)
+  const hint = maybeHint(sim.state, h.settings)
+  assert.equal(hint?.key, 'T2:empty-span')
+  assert.match(textOf(hint), /^Task T2 "second" closed below the fold floor/)
+})
+
+test('a delegate, folded or damaged task is never told its begin shared the message', async () => {
+  const { sim, h } = await packedBegin()
+  const task = /** @type {any} */ (sim.state.tasks.T1)
+  /** @param {Partial<any>} patch */
+  const withTask = (patch) =>
+    /** @type {State} */ ({ ...sim.state, tasks: { ...sim.state.tasks, T1: { ...task, ...patch } } })
+
+  // A delegated task waits for a summary; a folded one already has it. Neither is a span too small
+  // for its work, so neither gets the hint.
+  assert.equal(isEmptySpan({ ...task, status: 'delegate', verdict: 'delegate' }), false)
+  assert.equal(isEmptySpan({ ...task, status: 'folded' }), false)
+  // A below-floor task that never got a span start because begin and end shared one batch is the
+  // same shape, but only when both cuts are real: a damaged log is not a hint.
+  assert.equal(isEmptySpan({ ...task, spanStart: null }), true)
+  assert.equal(isEmptySpan({ ...task, beginCut: -1 }), false)
+  assert.equal(isEmptySpan({ ...task, endCut: null }), false)
+  assert.equal(isEmptySpan({ ...task, spanStart: -1 }), false)
+  assert.equal(maybeHint(withTask({ status: 'delegate', verdict: 'delegate' }), h.settings), null)
+  assert.equal(maybeHint(withTask({ status: 'folded' }), h.settings), null)
+})
+
+test('the age hint wins when both rules would fire', async () => {
+  const { sim, h } = await packedBegin({ title: 'closed' })
+  await h.batch([{ name: 'task_begin', args: { title: 'open' } }])
+  say(sim, 25)
+  const hint = maybeHint(sim.state, h.settings)
+  // The model is working inside T2, so the stale-task hint is what matters; T1's close waits.
+  assert.equal(hint?.key, 'T2:25')
+  assert.match(textOf(hint), /^Task T2 "open" has been open for 25\+ steps\./)
+  // With the age hint latched, the empty-span hint is the next candidate, not a replacement.
+  const after = maybeHint({ ...sim.state, hintKey: 'T2:25' }, h.settings)
+  assert.equal(after?.key, 'T1:empty-span')
+})
+
+// ---------------------------------------------------------------------------
 // The durable latch
 
 test('the durable latch suppresses a published key only', async () => {
@@ -273,9 +398,10 @@ test('the text is byte-stable while the age stays inside a bucket', async () => 
 // ---------------------------------------------------------------------------
 // Purity
 
-test('hints imports only the projection constant and the texts, and mutates nothing', async () => {
+test('hints imports only the pure cut/projection constants and the texts, and mutates nothing', async () => {
   const source = readFileSync(new URL('../host/hints.js', import.meta.url), 'utf8')
   assert.deepEqual(source.match(/^import .*$/gm), [
+    "import { ABSORBED } from './cuts.js'",
     "import { HINT_SOURCE_KIND } from './projection.js'",
     "import * as texts from './texts.js'",
   ])

@@ -78,7 +78,8 @@ host/
   planner.js          due-task selection and region resolution     (reads surface)
   tools.js            task_begin / task_end / fold_recall          (execute + render + meta)
   fold-runner.js      runs due folds from pre-step / turn-stopping; delegate scheduling
-  engine-adapter.js   the ONLY module touching dsh-compaction-basic internals
+  ports/compaction-shim.js the ONLY module touching dsh-compaction-basic internals
+  ports/compaction.js the port (fold/reject/classify); ports/logger.js, clock.js
   summarizer.js       delegate path: prefix-anchored request, instruction, validation
   recall.js           index, range, grep over a fold's shadowed messages
   hints.js            stale-task hint, durable latch
@@ -88,7 +89,7 @@ client/
   index.js            dock + settings card
 ```
 
-Dependency direction: `projection`, `cuts` are leaves; `planner`, `recall`, `hints`, `estimate` read the projection and the session; `tools` and `fold-runner` orchestrate; only `engine-adapter` and `summarizer` know about compaction internals or the LLM.
+Dependency direction: `projection`, `cuts` are leaves; `planner`, `recall`, `hints`, `estimate` read the projection and the session; `tools` and `fold-runner` orchestrate; only `ports/compaction-shim` and `summarizer` know about compaction internals or the LLM.
 
 ## 4. Data model
 
@@ -241,7 +242,7 @@ Runs inline in `agent/pre-step` (before `next()`) and in `agent/turn-stopping`, 
 
 1. Read the summary: `session.eventAt(task.endMsgSeq)` → the `tool-call` block with `id === task.endCallId` → parse `arguments` → `summary`.
 2. Build the node text (7.3).
-3. Call the adapter: `engine.compactRegion(start, end, agent, signal)` on the adapter engine whose `summarize()` returns the prepared blocks without an LLM call ([ADR 0004](adr/0004-engine-adapter.md)).
+3. Call the port: `engine.fold({ agent, region: { startSeq, endSeq }, blocks, route, usage, signal })` on the compaction port, whose shim `summarize()` returns the prepared blocks without an LLM call ([ADR 0004](adr/0004-engine-adapter.md)).
 4. On success: nothing else to do — the projection observes the replacement and marks `folded`.
 5. On a busy lock (`ManualCompactionError` code `busy`): stop this pass and retry at the next boundary (no cost, no log).
 6. On the host's shrink refusal (a plain `Error` whose message starts with "summary is not smaller than the shadowed content" — this entry path does not wrap errors, `docs/02` §6): mark the task unfoldable for this process and skip it. The size pre-check in the runner should make this rare.
@@ -266,7 +267,7 @@ For tasks with verdict `delegate` (no or unusable self-summary) and for self fol
 
 - At the next `pre-step` or `turn-stopping`, if `pending[taskId]` exists and the task's region still resolves to the same `start`, `end` and node list, commit through the adapter with the prepared blocks (5.3 steps 3–7). If the region changed, drop the text and regenerate later.
 
-**Failure accounting.** A failed generation never reaches the compaction engine, so the host would not record it. To keep the cap durable (ADR 0005), the runner records each failed generation as a zero-cost failed attempt: `compactRegion` on the task's region with a `summarize()` that rejects immediately (`FoldEngine.rejectRegion` in `engine-adapter.js`), which makes the host append `compaction/start` + `compaction/end{error}`. The reducer's existing `compaction/end{error}` row then counts it. After `maxDelegateFailures` (3) the task is `failed` and is never retried, across restarts. The record is written only when the region still resolves; an error from writing it is logged once and never retried in a loop.
+**Failure accounting.** A failed generation never reaches the compaction engine, so the host would not record it. To keep the cap durable (ADR 0005), the runner records each failed generation as a zero-cost failed attempt: `compactRegion` on the task's region with a `summarize()` that rejects immediately (`CompactionPort.reject` in `ports/compaction.js`, shim in `ports/compaction-shim.js`), which makes the host append `compaction/start` + `compaction/end{error}`. The reducer's existing `compaction/end{error}` row then counts it. After `maxDelegateFailures` (3) the task is `failed` and is never retried, across restarts. The record is written only when the region still resolves; an error from writing it is logged once and never retried in a loop.
 
 **Restart.** A generated-but-uncommitted text is lost on restart and is regenerated (one extra billed call at most per restart per task). Generation never holds the compaction lock, never blocks a step and never holds the user's next message.
 

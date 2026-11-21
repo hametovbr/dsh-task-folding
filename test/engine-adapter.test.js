@@ -1,10 +1,12 @@
-// The engine adapter (docs/adr/0004): it builds a plugin-owned engine on a shim context, hands
-// the prepared blocks to the host's transaction, and never registers anything on the realm.
+// The compaction port (docs/10 §7, docs/adr/0004-engine-adapter.md): the shim builds a plugin-owned
+// engine on a shim context, hands the prepared blocks to the host's transaction through the object
+// contract, and registers nothing on the realm.
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { createFoldEngine, resetFoldEngine } from '../host/engine-adapter.js'
+import { NativeCompactionPort } from '../host/ports/compaction-native.js'
+import { createCompactionPort, resetCompactionPort } from '../host/ports/compaction.js'
 
 /**
  * Stands in for BasicCompactionEngine: the same constructor contract (a Cordis Service that
@@ -50,8 +52,8 @@ class BusyError extends Error {
 }
 
 /**
- * A stub engine that keeps the error summarize() threw, so a test can prove rejectRegion fails
- * the transaction inside the summarize stage rather than before it.
+ * A stub engine that keeps the error summarize() threw, so a test can prove `reject` fails the
+ * transaction inside the summarize stage rather than before it.
  */
 class RecordingEngine extends StubEngine {
   /** @type {RecordingEngine[]} */
@@ -125,23 +127,28 @@ function context(overrides = {}) {
   }
 }
 
+/** @param {any} agent @param {number} startSeq @param {number} endSeq @param {any} blocks @param {any} route */
+function foldRequest(agent, startSeq, endSeq, blocks, route) {
+  return { agent, region: { startSeq, endSeq }, blocks, route, usage: undefined, signal: undefined }
+}
+
 test('the engine is constructed on a shim: nothing is provided on the realm context', async () => {
-  resetFoldEngine()
+  resetCompactionPort()
   const ctx = context()
-  const engine = await createFoldEngine(ctx, { loader: loader() })
-  assert.ok(engine, 'the engine was built')
+  const port = await createCompactionPort(ctx, { loader: loader() })
+  assert.ok(port, 'the port was built')
   assert.equal(StubEngine.constructed, 1)
   assert.deepEqual(ctx.provided, [], 'the realm context was never asked to provide compaction')
 })
 
 test('summarize returns exactly the prepared blocks and the recorded route', async () => {
-  resetFoldEngine()
+  resetCompactionPort()
   const ctx = context()
-  const engine = await createFoldEngine(ctx, { loader: loader() })
-  assert.ok(engine)
+  const port = await createCompactionPort(ctx, { loader: loader() })
+  assert.ok(port)
   const agent = { session: { id: 's' }, options: { provider: 'agent-provider', model: 'agent-model' } }
   const blocks = [{ type: 'text', text: '# T1 · t\nbody\n\n— fold of T1' }]
-  const result = await engine.foldRegion(agent, 3, 9, blocks, { provider: 'p', model: 'm' })
+  const result = await port.fold(foldRequest(agent, 3, 9, blocks, { provider: 'p', model: 'm' }))
   assert.deepEqual(result, {
     start: 3,
     end: 9,
@@ -152,7 +159,7 @@ test('summarize returns exactly the prepared blocks and the recorded route', asy
 })
 
 test('a fold never touches the LLM seam', async () => {
-  resetFoldEngine()
+  resetCompactionPort()
   const ctx = context({
     llm: {
       stream() {
@@ -160,23 +167,36 @@ test('a fold never touches the LLM seam', async () => {
       },
     },
   })
-  const engine = await createFoldEngine(ctx, { loader: loader() })
-  assert.ok(engine)
+  const port = await createCompactionPort(ctx, { loader: loader() })
+  assert.ok(port)
   const agent = { session: { id: 's' }, options: {} }
-  const result = await engine.foldRegion(agent, 1, 2, [{ type: 'text', text: 'x' }], {
-    provider: 'p',
-    model: 'm',
-  })
+  const result = await port.fold(
+    foldRequest(agent, 1, 2, [{ type: 'text', text: 'x' }], { provider: 'p', model: 'm' }),
+  )
   assert.deepEqual(result.summary, [{ type: 'text', text: 'x' }])
 })
 
-test('rejectRegion fails the transaction inside summarize, with a fixed error', async () => {
-  resetFoldEngine()
-  RecordingEngine.instances = []
-  const engine = await createFoldEngine(context(), { loader: recordingLoader })
-  assert.ok(engine)
+test('a fold forwards the delegate usage into the prepared summary', async () => {
+  resetCompactionPort()
+  const port = await createCompactionPort(context(), { loader: loader() })
+  assert.ok(port)
   const agent = { session: { id: 's' }, options: {} }
-  await assert.rejects(engine.rejectRegion(agent, 3, 9), {
+  const request = foldRequest(agent, 1, 2, [{ type: 'text', text: 'x' }], {
+    provider: 'p',
+    model: 'm',
+  })
+  const usage = { inputTokens: 3, outputTokens: 5, cacheReadTokens: 900 }
+  const result = await port.fold({ ...request, usage })
+  assert.deepEqual(result.usage, usage, 'usage is what the host records on compaction/summary')
+})
+
+test('reject fails the transaction inside summarize, with a fixed error', async () => {
+  resetCompactionPort()
+  RecordingEngine.instances = []
+  const port = await createCompactionPort(context(), { loader: recordingLoader })
+  assert.ok(port)
+  const agent = { session: { id: 's' }, options: {} }
+  await assert.rejects(port.reject({ agent, region: { startSeq: 3, endSeq: 9 }, signal: undefined }), {
     message: 'task-folding: the delegate summary could not be generated',
   })
   const recorded = RecordingEngine.instances.at(-1)
@@ -191,60 +211,68 @@ test('rejectRegion fails the transaction inside summarize, with a fixed error', 
 })
 
 test('a fold after a rejected region still returns the prepared blocks', async () => {
-  resetFoldEngine()
-  const engine = await createFoldEngine(context(), { loader: loader() })
-  assert.ok(engine)
+  resetCompactionPort()
+  const port = await createCompactionPort(context(), { loader: loader() })
+  assert.ok(port)
   const agent = { session: { id: 's' }, options: {} }
-  await assert.rejects(engine.rejectRegion(agent, 3, 9))
+  await assert.rejects(port.reject({ agent, region: { startSeq: 3, endSeq: 9 }, signal: undefined }))
   const blocks = [{ type: 'text', text: '# T1 · t\nbody\n\n— fold of T1' }]
-  const result = await engine.foldRegion(agent, 1, 2, blocks, { provider: 'p', model: 'm' })
+  const result = await port.fold(foldRequest(agent, 1, 2, blocks, { provider: 'p', model: 'm' }))
   assert.deepEqual(result, { start: 1, end: 2, summary: blocks, provider: 'p', model: 'm' })
 })
 
 test('classify separates busy, a refused summary and everything else', async () => {
-  resetFoldEngine()
-  const engine = await createFoldEngine(context(), { loader: loader() })
-  assert.ok(engine)
-  assert.equal(engine.classify(new BusyError('busy')), 'busy')
+  resetCompactionPort()
+  const port = await createCompactionPort(context(), { loader: loader() })
+  assert.ok(port)
+  assert.equal(port.classify(new BusyError('busy')), 'busy')
   assert.equal(
-    engine.classify(
+    port.classify(
       new Error('summary is not smaller than the shadowed content (12 estimated framed tokens >= 9)'),
     ),
     'summary',
   )
-  assert.equal(engine.classify(new Error('boom')), 'other')
-  assert.equal(engine.classify('not an error'), 'other')
-  assert.equal(engine.classify(null), 'other')
+  assert.equal(port.classify(new Error('boom')), 'other')
+  assert.equal(port.classify('not an error'), 'other')
+  assert.equal(port.classify(null), 'other')
 })
 
 test('the pairing helpers are the host exports', async () => {
-  resetFoldEngine()
-  const engine = await createFoldEngine(context(), { loader: loader() })
-  assert.ok(engine)
-  assert.equal(engine.balancedBefore({ id: 's' }, 1), true)
-  assert.equal(engine.balancedBefore({ id: 'unbalanced' }, 1), false)
-  assert.equal(engine.balancedAfter({ id: 's' }, 1), true)
+  resetCompactionPort()
+  const port = await createCompactionPort(context(), { loader: loader() })
+  assert.ok(port)
+  assert.equal(port.balancedBefore({ id: 's' }, 1), true)
+  assert.equal(port.balancedBefore({ id: 'unbalanced' }, 1), false)
+  assert.equal(port.balancedAfter({ id: 's' }, 1), true)
 })
 
 test('an unresolvable host package yields null once and is cached', async () => {
-  resetFoldEngine()
+  resetCompactionPort()
   let calls = 0
   const failing = async () => {
     calls += 1
     throw new Error('not installed')
   }
-  const first = await createFoldEngine(context(), { loader: failing })
-  const second = await createFoldEngine(context(), { loader: failing })
+  const first = await createCompactionPort(context(), { loader: failing })
+  const second = await createCompactionPort(context(), { loader: failing })
   assert.equal(first, null)
   assert.equal(second, null)
   assert.equal(calls, 1, 'the failure is cached for the process')
 })
 
 test('a host package without the expected exports yields null', async () => {
-  resetFoldEngine()
-  const engine = await createFoldEngine(context(), {
+  resetCompactionPort()
+  const port = await createCompactionPort(context(), {
     loader: async (/** @type {string} */ spec) =>
       spec === '@deepseek-ai/dsh-compaction' ? PUBLIC_API : { nothing: true },
   })
-  assert.equal(engine, null)
+  assert.equal(port, null)
+})
+
+test('the native stub has the same contract but refuses to be built', () => {
+  // docs/10 §15: the public host API does not exist yet, so selecting this implementation would
+  // silently disable folds. It has to fail loudly, and ports/compaction.js never selects it.
+  assert.throws(() => new NativeCompactionPort(), {
+    message: 'compaction-native: no public host API yet',
+  })
 })

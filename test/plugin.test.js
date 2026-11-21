@@ -5,8 +5,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import plugin, { PLUGIN_NAME, PROMPT_ORDER } from '../host/index.js'
+import { createPreStep } from '../host/plugin/pre-step.js'
 import { PROJECTION_KEY, STATE_VERSION, initialState } from '../host/projection.js'
-import { readSettings } from '../host/settings.js'
+import { defaults, readSettings } from '../host/settings.js'
 import { PROMPT_SECTION } from '../host/texts.js'
 
 /**
@@ -213,7 +214,7 @@ test('the pre-step handler appends one stale-task hint to the host decision', as
   assert.equal(returned.messages.length, 2, 'the host message plus one hint')
   const hint = returned.messages[1]
   assert.equal(hint.role, 'user')
-  assert.equal(typeof hint.id, 'string', 'the host rejects a durable message without an id')
+  assert.equal(hint.id, 'task-folding-hint:T1:25', 'the delimiter between the latch key and the id')
   assert.deepEqual(hint.source, { kind: 'task-folding:hint', key: 'T1:25' })
   assert.match(hint.content[0].text, /has been open for 25\+ steps/)
 })
@@ -247,4 +248,124 @@ test('the pre-step handler publishes a hint only once per key', async () => {
   const decision = { kind: 'enter', messages: [] }
   const returned = await preStep({ agent: { session: { id: 's' } }, turn: 1, step: 1 }, async () => decision)
   assert.equal(returned.messages.length, 0, 'the latch suppresses the second publication')
+})
+
+/**
+ * A task record the way the projection writes one (`onBegin` + `closeBatch`).
+ *
+ * @param {Record<string, any>} [patch]
+ * @returns {any}
+ */
+function taskRecord(patch = {}) {
+  return {
+    id: 'T1',
+    title: 'task',
+    parent: null,
+    depth: 0,
+    status: 'open',
+    beginCut: 3,
+    spanStart: 4,
+    endCut: null,
+    endMsgSeq: null,
+    endCallId: null,
+    verdict: null,
+    outcome: null,
+    estTokens: 0,
+    summaryChars: 0,
+    openedAt: 0,
+    reported: false,
+    failures: 0,
+    foldIndex: null,
+    ...patch,
+  }
+}
+
+test('a non-enter decision or a payload without a session passes through untouched', async () => {
+  const fake = fakeContext()
+  plugin.apply(fake.ctx, {})
+  const preStep = fake.listeners.find((listener) => listener.event === 'agent/pre-step')?.handler
+  fake.setState({
+    ...fake.state,
+    open: ['T1'],
+    tasks: { T1: taskRecord() },
+    order: ['T1'],
+    assistantCount: 30,
+  })
+  const skip = { kind: 'skip', messages: [] }
+  assert.equal(await preStep({ agent: { session: { id: 's' } } }, async () => skip), skip)
+  const enter = { kind: 'enter', messages: [] }
+  assert.equal(await preStep({}, async () => enter), enter, 'no session, no state to hint from')
+})
+
+test('the pre-step appends the empty-span hint after a begin-packed close', async () => {
+  const fake = fakeContext()
+  plugin.apply(fake.ctx, {})
+  const preStep = fake.listeners.find((listener) => listener.event === 'agent/pre-step')?.handler
+  const task = taskRecord({
+    status: 'below-floor',
+    verdict: 'below-floor',
+    beginCut: 5,
+    spanStart: 7,
+    endMsgSeq: 7,
+    endCut: 9,
+    endCallId: 'c2',
+    estTokens: 1000,
+    summaryChars: 40,
+    reported: true,
+  })
+  fake.setState({ ...fake.state, open: [], tasks: { T1: task }, order: ['T1'] })
+  const decision = { kind: 'enter', messages: [] }
+  const returned = await preStep({ agent: { session: { id: 's' } } }, async () => decision)
+  assert.equal(returned.messages.length, 1)
+  assert.equal(returned.messages[0].id, 'task-folding-hint:T1:empty-span')
+  assert.match(returned.messages[0].content[0].text, /closed below the fold floor/)
+})
+
+test('createPreStep owns the fold → hint → decision sequence, including the handle await', async () => {
+  const decision = { kind: 'enter', messages: [] }
+  const payload = { agent: { session: { id: 's' } } }
+  /** @type {any[]} */
+  const folded = []
+  let asked = 0
+  const neverRegistered = createPreStep({
+    runner: {
+      /** @param {any} payload @param {() => Promise<any>} next */
+      async preStep(payload, next) {
+        folded.push(payload)
+        return next()
+      },
+    },
+    projection: {},
+    settings: () => defaults(),
+    hints: () => {
+      asked += 1
+      return null
+    },
+  })
+  assert.equal(await neverRegistered(payload, async () => decision), decision)
+  assert.deepEqual(folded, [payload], 'the runner folds before the hint is considered')
+  assert.equal(asked, 0, 'no projection, no state, no hint rule')
+
+  const handled = createPreStep({
+    runner: {
+      /** @param {any} _payload @param {() => Promise<any>} next */
+      async preStep(_payload, next) {
+        return next()
+      },
+    },
+    projection: { handle: Promise.resolve({ stateOf: async () => initialState() }) },
+    settings: () => defaults(),
+    hints: () => ({
+      key: 'T1:empty-span',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'hint' }],
+        source: { kind: 'task-folding:hint', key: 'T1:empty-span' },
+      },
+    }),
+  })
+  const withHint = await handled(payload, async () => decision)
+  assert.equal(withHint.messages.length, 1)
+  assert.equal(withHint.messages[0].id, 'task-folding-hint:T1:empty-span')
+  assert.equal(decision.messages.length, 0, 'the host decision object itself is not mutated')
 })

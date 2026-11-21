@@ -1,13 +1,18 @@
 // The browser half (docs/03 §9): the module loads in the Client's loader form, registers its two
-// slots, and its runtime dictionary matches the packaged locale. No browser is needed for this.
+// slots, and registers the packaged dictionary that `npm run locale:gen` writes. No browser is
+// needed for this: both client scripts are classic scripts over a fake `window.__ModuleLoader__`.
 
 import assert from 'node:assert/strict'
 import { readFileSync, statSync } from 'node:fs'
 import { test } from 'node:test'
 
 const SOURCE = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')
+const GENERATED = readFileSync(new URL('../client/client.locale.generated.js', import.meta.url), 'utf8')
 const LOCALE = JSON.parse(readFileSync(new URL('../locale/en.json', import.meta.url), 'utf8'))
 const MANIFEST = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+
+/** The chunk name `client/client.js` requests and the host's chunk route accepts. */
+const CHUNK = 'client.locale.generated.js'
 
 /** A React stand-in: enough for the module to define components without rendering them. */
 const React = {
@@ -29,22 +34,60 @@ const React = {
 }
 
 /**
- * Load the client module the way the browser's loader does.
+ * Execute one classic client script the way the browser's loader does, and return everything it
+ * registered (the bundle registers itself with `id`; a package-local chunk adds `chunk`).
  *
- * @returns {{ id: string, plugin: any, registered: any[] }}
+ * @param {string} source
+ * @returns {any[]}
  */
-function loadClient() {
+function registrationsOf(source) {
+  /** @type {any[]} */
+  const registrations = []
+  const window = { __ModuleLoader__: { load: (/** @type {any} */ entry) => registrations.push(entry) } }
+  new Function('window', source)(window)
+  return registrations
+}
+
+/**
+ * The generated dictionary chunk, registered the way the host's on-demand chunk route makes the
+ * loader execute it.
+ *
+ * @returns {any}
+ */
+function generatedChunk() {
+  const chunk = registrationsOf(GENERATED).find((entry) => entry.chunk === CHUNK)
+  assert.ok(chunk, `the generated locale must register the ${CHUNK} chunk`)
+  return chunk
+}
+
+/**
+ * Load both client scripts the way the browser's loader does: the chunk arrives through
+ * `require.async`, and the module's factory receives the same `require`.
+ *
+ * @returns {Promise<{ id: string, plugin: any, registered: any[], locales: [string, any][] }>}
+ */
+async function loadClient() {
+  const chunks = registrationsOf(GENERATED)
   /** @type {any} */
-  let captured
-  const window = { __ModuleLoader__: { load: (/** @type {any} */ entry) => (captured = entry) } }
   const require = (/** @type {string} */ name) => {
     if (name === 'react') return React
     throw new Error(`the client module must not require ${name}`)
   }
-  new Function('window', 'require', SOURCE)(window, require)
+  require.async = async (/** @type {string} */ spec) => {
+    if (spec !== `./${CHUNK}`) throw new Error(`the client module must not load ${spec}`)
+    const chunk = chunks.find((entry) => entry.chunk === CHUNK)
+    if (chunk === undefined) throw new Error('the generated locale chunk is not registered')
+    return chunk.factory(require)
+  }
+  const captured = registrationsOf(SOURCE).find(
+    (entry) => entry.id === MANIFEST.name && entry.chunk === undefined,
+  )
+  assert.ok(captured, 'the client bundle must register itself under the package name')
   const plugin = captured.factory(require)
   /** @type {any[]} */
   const registered = []
+  /** @type {[string, any][]} */
+  const locales = []
   /** @type {any} */
   const ctx = {
     slots: {
@@ -59,16 +102,23 @@ function loadClient() {
     /** @param {() => any} fn */
     effect: (fn) => fn(),
     on: () => () => {},
-    locale: { register: () => () => {}, t: (/** @type {string} */ key) => key },
+    locale: {
+      /** @param {string} ns @param {any} dictionary */
+      register: (ns, dictionary) => {
+        locales.push([ns, dictionary])
+        return () => {}
+      },
+      t: (/** @type {string} */ key) => key,
+    },
     inject: () => {},
     get: () => undefined,
   }
-  plugin.apply(ctx)
-  return { id: captured.id, plugin, registered }
+  await plugin.apply(ctx)
+  return { id: captured.id, plugin, registered, locales }
 }
 
-test('the client module loads with the package id and registers both slots', () => {
-  const client = loadClient()
+test('the client module loads with the package id and registers both slots', async () => {
+  const client = await loadClient()
   assert.equal(client.id, MANIFEST.name, 'the loader id must be the package name')
   assert.deepEqual(client.plugin.inject, ['slots', 'locale'])
   const names = client.registered.map((entry) => entry.meta.name)
@@ -80,15 +130,35 @@ test('the client module loads with the package id and registers both slots', () 
   for (const entry of client.registered) assert.equal(typeof entry.component, 'function')
 })
 
-test('the packaged locale matches the runtime dictionary and keeps the display metadata', () => {
+test('the generated locale equals the packaged client section', () => {
   assert.equal(LOCALE.meta.title, 'Task folding')
   assert.ok(LOCALE.meta.description.length > 0)
-  const used = new Set(LOCALE.client ? Object.keys(LOCALE.client) : [])
-  assert.ok(used.size >= 20, `expected the client section, got ${used.size} keys`)
-  // Every key the module registers at runtime must be packaged: the Host reads locale/*.json for
-  // display metadata, while the browser module cannot import JSON, so the two lists can drift.
-  for (const key of used)
-    assert.ok(SOURCE.includes(`'${key}'`), `locale key ${key} is missing from client.js`)
+  const chunk = generatedChunk()
+  assert.equal(chunk.id, MANIFEST.name, 'the chunk must register under the owning package')
+  assert.equal(chunk.chunk, CHUNK)
+  const exports = chunk.factory(() => {
+    throw new Error('the generated dictionary requests no module')
+  })
+  assert.deepEqual(exports, { en: LOCALE.client }, 'locale:gen must emit exactly locale/en.json')
+  assert.ok(Object.keys(LOCALE.client).length >= 20, 'the client section is the whole dictionary')
+})
+
+test('the client module registers the packaged dictionary and keeps no copy of its own', async () => {
+  const client = await loadClient()
+  assert.equal(client.locales.length, 1, 'one locale namespace registration')
+  const locale = client.locales[0]
+  assert.ok(locale, 'the module registers one locale namespace')
+  const [ns, dictionary] = locale
+  assert.equal(ns, 'taskFolding')
+  assert.deepEqual(dictionary.en, LOCALE.client)
+  // The old inline copy is gone: the bundle only requests the generated chunk, so the packaged JSON
+  // and the browser dictionary cannot drift apart (docs/10 §11).
+  assert.match(SOURCE, /require\.async\('\.\/client\.locale\.generated\.js'\)/)
+  assert.equal(
+    SOURCE.includes("'settings.fields.minSpanTokens.description':"),
+    false,
+    'client.js must not carry its own dictionary',
+  )
 })
 
 test('the manifest declares the client entry point and platform', () => {

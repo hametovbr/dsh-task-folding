@@ -71,28 +71,17 @@ function successEngine(sim) {
   const calls = []
   return {
     calls,
-    /**
-     * @param {any} agent
-     * @param {number} start
-     * @param {number} end
-     * @param {any[]} blocks
-     * @param {any} route
-     * @param {AbortSignal | undefined} signal
-     * @param {any} [usage]
-     */
-    async foldRegion(agent, start, end, blocks, route, signal, usage) {
-      calls.push({ agent, start, end, blocks, route, signal, usage })
-      sim.compact(start, end)
-      return { start, end }
+    /** @param {any} request */
+    async fold(request) {
+      const { agent, region, blocks, route, signal, usage } = request
+      calls.push({ agent, start: region.startSeq, end: region.endSeq, blocks, route, signal, usage })
+      sim.compact(region.startSeq, region.endSeq)
+      return { start: region.startSeq, end: region.endSeq }
     },
     balancedBefore: () => true,
     balancedAfter: () => true,
-    /**
-     * @param {any} _agent
-     * @param {number} _start
-     * @param {number} _end
-     */
-    async rejectRegion(_agent, _start, _end) {
+    /** @param {any} _request */
+    async reject(_request) {
       throw new Error('this test never records a failed delegate generation')
     },
     /** @returns {'other'} */
@@ -115,31 +104,19 @@ function busyEngine(sim, busyAttempts) {
   const calls = success.calls
   return {
     calls,
-    /**
-     * @param {any} agent
-     * @param {number} start
-     * @param {number} end
-     * @param {any[]} blocks
-     * @param {any} route
-     * @param {AbortSignal | undefined} signal
-     * @param {any} [usage]
-     */
-    async foldRegion(agent, start, end, blocks, route, signal, usage) {
+    /** @param {any} request */
+    async fold(request) {
       if (busyLeft > 0) {
         busyLeft -= 1
         calls.push({ busy: true })
         throw Object.assign(new Error('the compaction lock is held'), { code: 'busy' })
       }
-      return success.foldRegion(agent, start, end, blocks, route, signal, usage)
+      return success.fold(request)
     },
     balancedBefore: success.balancedBefore,
     balancedAfter: success.balancedAfter,
-    /**
-     * @param {any} _agent
-     * @param {number} _start
-     * @param {number} _end
-     */
-    async rejectRegion(_agent, _start, _end) {
+    /** @param {any} _request */
+    async reject(_request) {
       throw new Error('this test never records a failed delegate generation')
     },
     /**
@@ -154,9 +131,9 @@ function busyEngine(sim, busyAttempts) {
 }
 
 /**
- * A success engine whose `rejectRegion` records the failure the way the host does: a zero-cost
- * failed compaction (`compaction/start` + `compaction/end{error}`) that is then rethrown
- * (copied from test/fold-runner.test.js).
+ * A success engine whose `reject` records the failure the way the host does: a zero-cost failed
+ * compaction (`compaction/start` + `compaction/end{error}`) that is then rethrown (copied from
+ * test/fold-runner.test.js).
  *
  * @param {Sim} sim
  */
@@ -166,18 +143,14 @@ function rejectEngine(sim) {
   const rejects = []
   return {
     calls: success.calls,
-    foldRegion: success.foldRegion,
+    fold: success.fold,
     balancedBefore: success.balancedBefore,
     balancedAfter: success.balancedAfter,
     classify: success.classify,
     rejects,
-    /**
-     * @param {any} _agent
-     * @param {number} start
-     * @param {number} end
-     * @param {AbortSignal | undefined} _signal
-     */
-    async rejectRegion(_agent, start, end, _signal) {
+    /** @param {any} request */
+    async reject(request) {
+      const { startSeq: start, endSeq: end } = request.region
       rejects.push({ start, end })
       sim.failCompaction()
       throw new Error('the summary is unavailable')
@@ -487,7 +460,7 @@ test('a fold that fails before writing stays waiting and is retried on the backo
   const sim = await reportedQueuedTask()
   const engine = successEngine(sim)
   let attempts = 0
-  engine.foldRegion = async () => {
+  engine.fold = async () => {
     attempts += 1
     throw new Error('the transaction could not start')
   }
@@ -529,7 +502,8 @@ test('a fold that commits and then throws is counted once and never folded twice
   const engine = successEngine(sim)
   /** @type {{ start: number, end: number }[]} */
   const commits = []
-  engine.foldRegion = async (_agent, start, end, _blocks, _route, _signal, _usage) => {
+  engine.fold = async (request) => {
+    const { startSeq: start, endSeq: end } = request.region
     commits.push({ start, end })
     sim.compact(start, end) // the transaction commits its body...
     throw new Error('the commit acknowledgement was lost') // ...and the answer never arrives
@@ -709,7 +683,8 @@ test('an abort before the fold transaction folds nothing and does not escape the
   /** @type {boolean[]} */
   const signalStates = []
   const engine = successEngine(sim)
-  engine.foldRegion = async (agent, start, end, blocks, route, signal) => {
+  engine.fold = async (request) => {
+    const { signal } = request
     signalStates.push(signal !== undefined && signal.aborted)
     // The host appends compaction/start, then refuses the abort at summarize() and closes the
     // transaction with compaction/end{error}.
@@ -793,7 +768,7 @@ test('a held lock retries once in the pass, logs once, and folds at the next bou
 test('a throwing logger neither breaks the pass nor replaces the original error', async () => {
   const sim = await reportedQueuedTask()
   const engine = successEngine(sim)
-  engine.foldRegion = async () => {
+  engine.fold = async () => {
     throw new Error('the transaction could not start')
   }
   /** @type {string[]} */

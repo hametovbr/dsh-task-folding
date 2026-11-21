@@ -16,7 +16,7 @@ Instructions for anyone — human or coding agent — implementing dsh-task-fold
 3. `host/projection.js` and `host/cuts.js` are pure: no `ctx`, no I/O, no `Date.now()`, no randomness.
 4. No code on the `agent/pre-step` or `agent/turn-stopping` path calls `session.snapshotEvents()` or iterates the event log.
 5. Never await an LLM call inside `agent/pre-step` or `agent/turn-stopping`; delegate summaries are generated in an un-awaited background promise (see `docs/adr/0006-background-delegate.md`).
-6. Only `host/engine-adapter.js` may import, resolve or reference `@deepseek-ai/dsh-compaction-basic` internals.
+6. Only `host/ports/compaction-shim.js` may import, resolve or reference `@deepseek-ai/dsh-compaction-basic` internals; `host/ports/compaction.js` is the port every caller uses.
 7. Never wrap or monkey-patch host services (`ctx.llm`, `ctx.compaction`, …).
 8. Never write files to disk at runtime.
 9. All model-facing strings live in `host/texts.js`; the prompt budget test must pass.
@@ -30,10 +30,14 @@ Instructions for anyone — human or coding agent — implementing dsh-task-fold
 ## Commands
 
 ```sh
-npm test            # node:test, all unit/property/replay/component tests
-npm run coverage    # tests + 100% coverage gate for host/projection.js and host/cuts.js
+npm test            # node:test, all unit/property/replay/component/degradation/fault tests
+npm run coverage    # tests + the gate for every host/*.js (>=90% lines, >=85% branches, >=80% functions)
 npm run typecheck   # tsc --noEmit --checkJs
 npm run lint        # eslint + prettier --check
+npm run pack:check  # manifest and tarball contract (offline)
+npm run mutation    # single-operator mutations of the pure modules, score >= 85%
+npm run perf        # wall-clock guards, kept out of `npm test`
+npm run locale:gen  # regenerate client/client.locale.generated.js from locale/en.json
 ```
 
 ## Commits

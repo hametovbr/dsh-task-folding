@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { createFoldEngine, resetFoldEngine } from '../host/engine-adapter.js'
+import { createCompactionPort, resetCompactionPort } from '../host/ports/compaction.js'
 import plugin, { ENGINE_UNAVAILABLE, PLUGIN_NAME } from '../host/index.js'
 import { apply, initialState, parseState, PROJECTION_KEY, STATE_VERSION } from '../host/projection.js'
 
@@ -351,7 +351,7 @@ async function flushMicrotasks() {
 // ---------------------------------------------------------------------------
 // Engine seams
 
-/** The host pairing helpers the adapter insists on (host/engine-adapter.js:87-89). */
+/** The host pairing helpers the adapter insists on (host/ports/compaction-shim.js, assemble()). */
 const COMPACTION_API = Object.freeze({
   ManualCompactionError: class ManualCompactionError extends Error {},
   /** @param {any} _session @param {number} _seq */
@@ -396,13 +396,13 @@ function hostWithEngine() {
 // 1. No compaction engine
 
 test('no engine: the tools still work, one warn line, no fold is attempted', async () => {
-  resetFoldEngine()
+  resetCompactionPort()
   const fake = fakeContext()
   // Freeze the process-wide engine cache to "no engine" before apply(). The adapter answers null
-  // when neither host package resolves (host/engine-adapter.js:68-75), and it never asks
+  // when neither host package resolves (host/ports/compaction-shim.js, createShimCompactionPort()), and it never asks
   // ctx.get('compaction'): it builds a plugin-owned engine. So "no compaction service in ctx" and
   // "the adapter finds no BasicCompactionEngine" are the same supported mode.
-  assert.equal(await createFoldEngine(fake.ctx, { loader: async () => null }), null)
+  assert.equal(await createCompactionPort(fake.ctx, { loader: async () => null }), null)
   plugin.apply(fake.ctx, {})
   await flushMicrotasks()
 
@@ -421,7 +421,7 @@ test('no engine: the tools still work, one warn line, no fold is attempted', asy
   assert.equal(fake.logs[0]?.level, 'warn')
   assert.ok((fake.logs[0]?.message ?? '').includes(ENGINE_UNAVAILABLE))
   assert.ok((fake.logs[0]?.message ?? '').startsWith(PLUGIN_NAME))
-  assert.equal(await createFoldEngine(fake.ctx), null, 'the cached answer stays "no engine"')
+  assert.equal(await createCompactionPort(fake.ctx), null, 'the cached answer stays "no engine"')
 
   // task_begin opens a task. The host appends the assistant message first, so the tool reads a
   // state with the begin batch in flight; its persisted meta is what opens the task.
@@ -477,12 +477,12 @@ test('no engine: the tools still work, one warn line, no fold is attempted', asy
 // 2. No `llm` service
 
 test('no llm: a delegate task waits and the "summaries are off" line is written once', async () => {
-  resetFoldEngine()
+  resetCompactionPort()
   const host = hostWithEngine()
   const fake = fakeContext()
   // A resolved engine is required to reach the delegate path at all; the missing `ctx.get('llm')`
   // is what makes delegation unavailable (host/index.js:120-130).
-  await createFoldEngine(fake.ctx, { loader: host.loader })
+  await createCompactionPort(fake.ctx, { loader: host.loader })
   plugin.apply(fake.ctx, {})
   await flushMicrotasks()
   assert.equal(fake.logs.length, 0, 'a resolved engine must not produce the engine-unavailable line')
@@ -517,7 +517,7 @@ test('no llm: a delegate task waits and the "summaries are off" line is written 
 // 3. No registration sink
 
 test('no tool sink: apply stays inactive with one warning and never throws a TypeError', () => {
-  resetFoldEngine()
+  resetCompactionPort()
   const fake = fakeContext({ omit: ['tools'] })
   // host/index.js:73-81 wraps every tool registration: the missing registry throws inside the
   // try, the already-registered disposers run and the plugin logs one line and returns. Staying
@@ -624,9 +624,9 @@ test('a begin meta whose title is not a string is ignored', () => {
 })
 
 test('the registered projection keeps malformed meta out of state and still reports version 1', async () => {
-  resetFoldEngine()
+  resetCompactionPort()
   const fake = fakeContext()
-  await createFoldEngine(fake.ctx, { loader: async () => null })
+  await createCompactionPort(fake.ctx, { loader: async () => null })
   plugin.apply(fake.ctx, {})
   await flushMicrotasks()
   const definition = fake.projections[0]
@@ -663,9 +663,9 @@ test('the registered projection keeps malformed meta out of state and still repo
 // 5. A log written by another realm
 
 test('a foreign-realm log keeps the projection on its own state version and does not throw', async () => {
-  resetFoldEngine()
+  resetCompactionPort()
   const fake = fakeContext()
-  await createFoldEngine(fake.ctx, { loader: async () => null })
+  await createCompactionPort(fake.ctx, { loader: async () => null })
   plugin.apply(fake.ctx, {})
   await flushMicrotasks()
   const definition = fake.projections[0]

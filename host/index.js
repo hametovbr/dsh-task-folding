@@ -1,11 +1,12 @@
 // The plugin object (docs/02-host-api.md §1). It registers the projection, the three tools, the
 // prompt section and the two fold boundaries (docs/03 §5).
 
-import { createFoldEngine } from './engine-adapter.js'
+import { createCompactionPort } from './ports/compaction.js'
 import { SpanEstimator } from './estimate.js'
 import { createFoldRunner } from './fold-runner.js'
 import { createLogPort } from './ports/logger.js'
 import { maybeHint } from './hints.js'
+import { createPreStep } from './plugin/pre-step.js'
 import {
   PROJECTION_KEY,
   STATE_VERSION,
@@ -108,10 +109,10 @@ const plugin = {
 
     ctx.systemPrompt.section({ name: 'task-folding', order: PROMPT_ORDER, text: texts.PROMPT_SECTION })
 
-    // The engine is built once, in the background, so the first boundary that folds does not pay
-    // for the module resolution. A null engine keeps the plugin working without folds (§11).
-    const engine = createFoldEngine(ctx)
-    engine.then(
+    // The compaction port is built once, in the background, so the first boundary that folds does
+    // not pay for the module resolution. A null port keeps the plugin working without folds (§11).
+    const port = createCompactionPort(ctx)
+    port.then(
       (resolved) => {
         if (resolved === null)
           ctx.logger.warn(
@@ -204,33 +205,19 @@ const plugin = {
         if (projection.handle === undefined) throw new Error(texts.ERR_UNAVAILABLE)
         return (await projection.handle).stateOf(session)
       },
-      engine: () => engine,
+      engine: () => port,
       estimator,
       log: logPort, // the port, so a throwing sink cannot break the pass
       delegate,
     })
-    /**
-     * The pre-step boundary: fold what is due, then hand the host's own decision back, possibly
-     * with one stale-task hint appended (docs/03 §8). The message needs a stable id: the host's
-     * `assertMessageEventShape` rejects a durable message without one, and the key is the identity
-     * the projection latches on.
-     *
-     * @param {any} payload
-     * @param {() => Promise<any>} next
-     */
-    const onPreStep = async (payload, next) => {
-      const decision = await runner.preStep(payload, next)
-      if (!decision || decision.kind !== 'enter' || projection.handle === undefined) return decision
-      const session = payload?.agent?.session
-      if (!session) return decision
-      const state = await (await projection.handle).stateOf(session)
-      const hint = maybeHint(state, readSettings(config))
-      if (hint === null) return decision
-      return {
-        ...decision,
-        messages: [...decision.messages, { ...hint.message, id: `task-folding-hint:${hint.key}` }],
-      }
-    }
+    // The pre-step sequence (fold → hint → decision) lives in one module, so the two handlers can
+    // never disagree about what the decision is (docs/10 §5, §16 step 7).
+    const onPreStep = createPreStep({
+      runner,
+      projection,
+      settings: () => readSettings(config),
+      hints: maybeHint,
+    })
     /** @param {any} payload */
     const onTurnStopping = (payload) => runner.turnStopping(payload)
     ctx.on('agent/pre-step', onPreStep)

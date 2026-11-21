@@ -12,8 +12,9 @@ import * as texts from './texts.js'
 /** @typedef {import('./types.js').Task} Task */
 /** @typedef {import('./planner.js').FoldRegion} FoldRegion */
 /** @typedef {import('./planner.js').Region} Region */
-/** @typedef {import('./engine-adapter.js').FoldEngine} FoldEngine */
-/** @typedef {import('./engine-adapter.js').FoldRoute} FoldRoute */
+/** @typedef {import('./ports/compaction.js').CompactionPort} CompactionPort */
+/** @typedef {import('./ports/compaction.js').FoldRoute} FoldRoute */
+/** @typedef {import('./ports/compaction.js').SummaryResult} SummaryResult */
 /** @typedef {import('./estimate.js').SpanEstimator} SpanEstimator */
 
 /**
@@ -52,7 +53,7 @@ export const MAX_BACKOFF_BOUNDARIES = 8
 /**
  * @typedef {object} FoldRunnerDeps
  * @property {(session: any) => Promise<State>} stateOf
- * @property {() => Promise<FoldEngine | null>} engine resolves the engine once per process
+ * @property {() => Promise<CompactionPort | null>} engine resolves the engine once per process
  * @property {SpanEstimator} estimator
  * @property {{ warn: (message: string) => void, info?: (message: string) => void }} [logger]
  *   a raw host logger; wrapped in `ports/logger.js` so a throwing sink cannot break a pass
@@ -187,7 +188,7 @@ export function createFoldRunner(deps) {
    * @param {any} session
    * @param {Task} task
    * @param {Snapshot} snap
-   * @param {FoldEngine} engine
+   * @param {CompactionPort} engine
    * @param {AbortSignal | undefined} signal
    * @returns {Promise<'folded' | 'busy' | 'skipped' | 'deferred'>}
    */
@@ -206,7 +207,7 @@ export function createFoldRunner(deps) {
    * @param {any} session
    * @param {readonly Task[]} due
    * @param {Snapshot} snap
-   * @param {FoldEngine} engine
+   * @param {CompactionPort} engine
    * @param {AbortSignal | undefined} signal
    */
   function startDelegate(agent, session, due, snap, engine, signal) {
@@ -289,7 +290,7 @@ export function createFoldRunner(deps) {
    * @param {any} session
    * @param {Task} task
    * @param {Snapshot} snap
-   * @param {FoldEngine} engine
+   * @param {CompactionPort} engine
    * @param {AbortSignal | undefined} signal
    * @returns {Promise<'folded' | 'busy' | 'skipped' | 'deferred'>}
    */
@@ -311,7 +312,7 @@ export function createFoldRunner(deps) {
    * @param {any} session
    * @param {Task} task
    * @param {Snapshot} snap
-   * @param {FoldEngine} engine
+   * @param {CompactionPort} engine
    * @param {AbortSignal | undefined} signal
    * @param {PendingSummary} summary
    * @returns {Promise<'folded' | 'busy' | 'skipped' | 'deferred'>}
@@ -335,15 +336,23 @@ export function createFoldRunner(deps) {
       return 'skipped'
     }
     try {
-      await engine.foldRegion(
+      // The generated blocks are marked `delegate` in our own record of authorship: the host sees
+      // prepared blocks unmarked, so `source` is the plugin's (docs/10 §8).
+      /** @type {SummaryResult} */
+      const prepared = {
+        blocks: summary.blocks,
+        route: routeOf(snap.state, session, agent),
+        usage: summary.usage,
+        source: 'delegate',
+      }
+      await engine.fold({
         agent,
-        region.start,
-        region.end,
-        summary.blocks,
-        routeOf(snap.state, session, agent),
+        region: { startSeq: region.start, endSeq: region.end },
+        blocks: prepared.blocks,
+        route: prepared.route,
+        usage: prepared.usage,
         signal,
-        summary.usage,
-      )
+      })
       dropPending(session, task.id)
       return 'folded'
     } catch (error) {
@@ -370,7 +379,7 @@ export function createFoldRunner(deps) {
    * @param {any} agent
    * @param {any} session
    * @param {Task} task
-   * @param {FoldEngine} engine
+   * @param {CompactionPort} engine
    * @param {AbortSignal | undefined} signal
    * @returns {Promise<boolean>} whether the host was asked to record the failure
    */
@@ -378,7 +387,11 @@ export function createFoldRunner(deps) {
     const region = resolveRegion(task, session.surface.nodes)
     if (region.kind !== 'fold') return false
     try {
-      await engine.rejectRegion(agent, region.start, region.end, signal)
+      await engine.reject({
+        agent,
+        region: { startSeq: region.start, endSeq: region.end },
+        signal,
+      })
     } catch (error) {
       // The host appends compaction/end{error} and then rethrows, so a rejection here is the
       // expected outcome; anything else cannot be retried without looping.
@@ -546,7 +559,7 @@ export function createFoldRunner(deps) {
    * @param {any} session
    * @param {Task} task
    * @param {Snapshot} snap
-   * @param {FoldEngine} engine
+   * @param {CompactionPort} engine
    * @param {AbortSignal | undefined} signal
    * @returns {Promise<'folded' | 'busy' | 'skipped' | 'deferred'>}
    */
@@ -572,14 +585,23 @@ export function createFoldRunner(deps) {
       return 'skipped'
     }
     try {
-      await engine.foldRegion(
+      // The model wrote this summary itself, in the closing call: the record says so, even though
+      // the host records the prepared blocks unmarked (docs/10 §8).
+      /** @type {SummaryResult} */
+      const prepared = {
+        blocks: [{ type: 'text', text: nodeText }],
+        route: routeOf(snap.state, session, agent),
+        usage: undefined,
+        source: 'self',
+      }
+      await engine.fold({
         agent,
-        region.start,
-        region.end,
-        [{ type: 'text', text: nodeText }],
-        routeOf(snap.state, session, agent),
+        region: { startSeq: region.start, endSeq: region.end },
+        blocks: prepared.blocks,
+        route: prepared.route,
+        usage: prepared.usage,
         signal,
-      )
+      })
       return 'folded'
     } catch (error) {
       const kind = engine.classify(error)
@@ -594,7 +616,7 @@ export function createFoldRunner(deps) {
   }
 
   /**
-   * @param {FoldEngine} engine
+   * @param {CompactionPort} engine
    * @param {any} session
    * @param {FoldRegion} region
    */

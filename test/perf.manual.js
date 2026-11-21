@@ -66,8 +66,9 @@ function recordingEngine() {
   const calls = []
   return {
     calls,
-    /** @param {any} _agent @param {number} start @param {number} end */
-    async foldRegion(_agent, start, end) {
+    /** @param {any} request */
+    async fold(request) {
+      const { startSeq: start, endSeq: end } = request.region
       calls.push({ start, end })
       return {}
     },

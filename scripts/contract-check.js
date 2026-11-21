@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Contract check for the engine adapter (docs/adr/0004): download the published host packages in
-// the peer range and assert the facts `host/engine-adapter.js` relies on. Needs network, so it is
+// the peer range and assert the facts `host/ports/compaction-shim.js` relies on. Needs network, so it is
 // not part of `npm test`.
 //
 //   npm run contract            # newest version allowed by package.json peerDependencies

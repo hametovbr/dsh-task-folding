@@ -78,6 +78,20 @@
  */
 
 /**
+ * Token accounting for one model call (docs/02-host-api.md §6, from the host's `TokenUsage` in
+ * `packages/llm/llm/src/types.ts`). The counts are disjoint: `inputTokens` is uncached input only,
+ * so a cache-hit share is `cacheReadTokens / (cacheReadTokens + inputTokens)`.
+ *
+ * @typedef {object} TokenUsage
+ * @property {number} inputTokens uncached input only
+ * @property {number} outputTokens
+ * @property {number} [totalTokens] full-call total, when the adapter reported one
+ * @property {number} [cacheReadTokens]
+ * @property {number} [cacheWriteTokens]
+ * @property {number} [reasoningTokens]
+ */
+
+/**
  * @typedef {object} State
  * @property {number} nextId
  * @property {string[]} open stack, outermost first

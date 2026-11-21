@@ -1,8 +1,12 @@
-// The only module that knows @deepseek-ai/dsh-compaction-basic (docs/adr/0004-engine-adapter.md).
-// It builds a plugin-owned BasicCompactionEngine subclass whose summarize() either returns the
-// blocks the fold runner prepared, so a fold costs no LLM call, or rejects, so a failed delegate
-// generation becomes a durable failed-compaction row (docs/07 Q11). Either way the host keeps its
-// lock, validation, pricing and commit path.
+// The compaction port against today's host internals (docs/10 §7): a plugin-owned
+// BasicCompactionEngine subclass whose summarize() either returns the blocks the fold runner
+// prepared, so a fold costs no LLM call, or rejects, so a failed delegate generation becomes a
+// durable failed-compaction row (docs/07 Q11). Either way the host keeps its lock, validation,
+// pricing and commit path.
+//
+// This is the only module that imports, resolves or references
+// `@deepseek-ai/dsh-compaction-basic` and `@deepseek-ai/dsh-compaction` internals — the boundary
+// docs/10 §7 and the engine-adapter ADR (docs/adr/0004-engine-adapter.md) put behind one port.
 //
 // The realm's own engine must survive this (docs/adr/0004 "Construction"): a Cordis Service
 // registers itself through `ctx.reflect.provide(name, …)` in its constructor, so the subclass is
@@ -10,7 +14,9 @@
 // transaction reads; anything else the base class might touch throws instead of silently
 // registering against the realm.
 
-import { loadHostModule } from './resolve.js'
+import { loadHostModule } from '../resolve.js'
+
+/** @typedef {import('./compaction.js').CompactionPort} CompactionPort */
 
 /** Codes that mean "not now, the durable compaction lock is held". */
 const BUSY = 'busy'
@@ -23,53 +29,18 @@ const SUMMARY_TOO_LARGE = /^summary is not smaller than the shadowed content/
 export const DELEGATE_SUMMARY_FAILED = 'task-folding: the delegate summary could not be generated'
 
 /**
- * @typedef {object} FoldRoute
- * @property {string} provider
- * @property {string} model
- */
-
-/**
- * @typedef {object} FoldEngine
- * @property {(agent: any, start: number, end: number, blocks: any[], route: FoldRoute, signal?: AbortSignal, usage?: any) => Promise<any>} foldRegion
- *   `usage` is the delegate call's provider usage: the host records it on `compaction/summary`, and
- *   that row is the only place the plugin's cache-hit can be audited (docs/03 §12 invariant 9)
- * @property {(agent: any, start: number, end: number, signal?: AbortSignal) => Promise<any>} rejectRegion
- * @property {(session: any, seq: number) => boolean} balancedBefore
- * @property {(session: any, seq: number) => boolean} balancedAfter
- * @property {(error: unknown) => 'busy' | 'summary' | 'other'} classify
- */
-
-/** @type {Promise<FoldEngine | null> | undefined} */
-let cached
-
-/**
- * Build the fold engine once per process. A failure is cached too: the plugin keeps working
- * without folds and says so once (docs/03 §11).
+ * Build the port once per process. A failed resolution is a cacheable "no folds" answer, not a
+ * crash (docs/03 §11).
  *
  * @param {any} ctx the plugin's context
- * @param {{ loader?: typeof loadHostModule }} [options] test seam
- * @returns {Promise<FoldEngine | null>}
+ * @param {{ loader?: typeof loadHostModule }} [options] test seam: the host-package loader
+ * @returns {Promise<CompactionPort | null>}
  */
-export function createFoldEngine(ctx, options = {}) {
-  cached ??= build(ctx, options.loader ?? loadHostModule)
-  return cached
-}
-
-/** Forget the cached engine (tests only). */
-export function resetFoldEngine() {
-  cached = undefined
-}
-
-/**
- * @param {any} ctx
- * @param {typeof loadHostModule} loader
- * @returns {Promise<FoldEngine | null>}
- */
-async function build(ctx, loader) {
+export async function createShimCompactionPort(ctx, options = {}) {
+  const loader = options.loader ?? loadHostModule
   try {
     return await assemble(ctx, loader)
   } catch {
-    // A failed resolution is a cacheable "no folds" answer, not a crash (docs/03 §11).
     return null
   }
 }
@@ -77,7 +48,7 @@ async function build(ctx, loader) {
 /**
  * @param {any} ctx
  * @param {typeof loadHostModule} loader
- * @returns {Promise<FoldEngine | null>}
+ * @returns {Promise<CompactionPort | null>}
  */
 async function assemble(ctx, loader) {
   const basic = await loader('@deepseek-ai/dsh-compaction-basic')
@@ -92,7 +63,7 @@ async function assemble(ctx, loader) {
     /** @param {any} shim */
     constructor(shim) {
       super(shim, { auto: false })
-      /** @type {{ summary: any[], provider: string, model: string } | null} */
+      /** @type {{ summary: any[], provider: string, model: string, usage?: any } | null} */
       this.prepared = null
       /** When set, summarize() rejects instead of returning prepared blocks (reject mode). */
       this.reject = false
@@ -121,7 +92,12 @@ async function assemble(ctx, loader) {
   const engine = new FoldEngine(shim)
 
   return {
-    async foldRegion(agent, start, end, blocks, route, signal, usage) {
+    /**
+     * @param {import('./compaction.js').FoldRequest} request
+     * @returns {Promise<any>}
+     */
+    async fold(request) {
+      const { agent, region, blocks, route, usage, signal } = request
       engine.prepared = {
         summary: blocks,
         provider: route.provider,
@@ -129,21 +105,25 @@ async function assemble(ctx, loader) {
         ...(usage === undefined ? {} : { usage }),
       }
       try {
-        return await /** @type {any} */ (engine).compactRegion(start, end, agent, signal)
+        return await /** @type {any} */ (engine).compactRegion(region.startSeq, region.endSeq, agent, signal)
       } finally {
         engine.prepared = null
       }
     },
     /**
-     * Same transaction as foldRegion, but summarize() rejects immediately: the host appends
+     * Same transaction as `fold`, but summarize() rejects immediately: the host appends
      * `compaction/start` and then `compaction/end { error }` at zero LLM cost, which is the durable
      * delegate-failure record the projection counts (docs/07 Q11). The transaction rethrows, so the
      * caller sees the expected rejection; no prepared blocks are involved.
+     *
+     * @param {import('./compaction.js').RejectRequest} request
+     * @returns {Promise<any>}
      */
-    async rejectRegion(agent, start, end, signal) {
+    async reject(request) {
+      const { agent, region, signal } = request
       engine.reject = true
       try {
-        return await /** @type {any} */ (engine).compactRegion(start, end, agent, signal)
+        return await /** @type {any} */ (engine).compactRegion(region.startSeq, region.endSeq, agent, signal)
       } finally {
         engine.reject = false
       }

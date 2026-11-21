@@ -1434,3 +1434,38 @@ test('the generator reaches the design edges (a property without its interesting
     assert.ok(count > 0, `the generator never produced the ${edge} case; widen the generator, not the test`)
   }
 })
+
+test('the surface epoch counts replacements and ignores appends', () => {
+  // docs/10 §4.1: the epoch is the identity of the node list. Appending a node does not change any
+  // existing node, so it must not move the version; a replacement does, even when no task is touched.
+  fc.assert(
+    fc.property(fc.integer({ min: 0, max: 6 }), fc.integer({ min: 0, max: 3 }), (appends, replaces) => {
+      let state = initialState()
+      let seq = 0
+      /** @type {number[]} */
+      const nodes = []
+      const append = () => {
+        seq += 1
+        nodes.push(seq)
+        state = apply(state, { type: 'system/message', seq, data: {} })
+      }
+      append()
+      const before = state.surfaceEpoch
+      for (let i = 0; i < appends; i += 1) append()
+      assert.equal(state.surfaceEpoch, before, 'an append does not move the epoch')
+      for (let i = 0; i < replaces; i += 1) {
+        const victim = /** @type {number} */ (nodes.pop())
+        seq += 1
+        nodes.push(seq)
+        state = apply(state, {
+          type: 'system/message',
+          seq,
+          data: {},
+          surfaceOp: { op: 'replace', startSeq: victim, endSeq: victim },
+        })
+      }
+      assert.equal(state.surfaceEpoch, before + replaces, 'each replacement moves it exactly once')
+    }),
+    { numRuns: 50, seed: 20261121 },
+  )
+})

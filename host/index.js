@@ -4,6 +4,7 @@
 import { createFoldEngine } from './engine-adapter.js'
 import { SpanEstimator } from './estimate.js'
 import { createFoldRunner } from './fold-runner.js'
+import { createLogPort } from './ports/logger.js'
 import { maybeHint } from './hints.js'
 import {
   PROJECTION_KEY,
@@ -197,6 +198,7 @@ const plugin = {
       },
     }
 
+    const logPort = createLogPort(ctx.logger)
     const runner = createFoldRunner({
       async stateOf(session) {
         if (projection.handle === undefined) throw new Error(texts.ERR_UNAVAILABLE)
@@ -204,7 +206,7 @@ const plugin = {
       },
       engine: () => engine,
       estimator,
-      logger: ctx.logger,
+      log: logPort, // the port, so a throwing sink cannot break the pass
       delegate,
     })
     /**

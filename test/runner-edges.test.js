@@ -229,7 +229,10 @@ test('a skip is logged once and never retried in this process', async () => {
   assert.equal(engine.calls.length, 0, 'the task never reaches foldRegion')
   assert.equal(sim.state.tasks.T1?.status, 'queued', 'the task waits, it is not folded')
   assert.equal(logs.length, 1)
-  assert.match(member(logs, 0), /folding T1 is skipped for this process: region is not tool-pairing balanced/)
+  assert.match(
+    member(logs, 0),
+    /folding T1 is skipped at surface version \d+: region is not tool-pairing balanced/,
+  )
 
   // docs/03 §5.2/§5.3: the task is marked unfoldable for the process, so the next boundary neither
   // checks nor logs it again.
@@ -413,22 +416,23 @@ test('a task that becomes terminal while its generation is in flight is never fo
   const agent = agentOf(sim)
 
   const report = await runner.pass(agent, undefined, true)
-  // The competing transaction folded the whole outer span, which covers T2 as well: phase 2 re-reads
-  // that and skips T2 instead of folding a task the host already terminalized.
-  assert.deepEqual(report, { folded: 1, busy: false, skipped: [] }, 'only the queued inner task folds')
-  assert.equal(engine.calls.length, 1, 'the delegate task is not folded a second time')
-  assert.equal(sim.state.tasks.T2?.status, 'folded')
+  // The competing transaction folded the whole outer span; T2's cuts no longer resolve on the
+  // surface the pass re-read, so it is skipped **at that surface version** — not for the process.
+  // A later replacement moves the epoch and the task is looked at again (the F9 acceptance).
+  assert.deepEqual(report, { folded: 0, busy: false, skipped: ['T2'] })
+  assert.equal(engine.calls.length, 0, 'the runner does not fold a task whose region moved')
   assert.equal(sim.state.tasks.T1?.status, 'folded', 'the external fold is durable')
-  assert.equal(sim.state.folds.length, 2, 'the inner fold and the external one')
-  assert.deepEqual(logs, [])
+  assert.equal(sim.state.folds.length, 1, 'only the external fold exists')
+  assert.equal(logs.length, 1)
+  assert.match(member(logs, 0), /folding T2 is skipped at surface version \d+/)
 
   // The generation still settles later; the runner already holds no use for it.
   ctl.resolve(0, { blocks: [{ type: 'text', text: '## Stale\nToo late to matter.' }] })
   await flushMicrotasks()
   const next = await runner.pass(agent, undefined, true)
   assert.deepEqual(next, { folded: 0, busy: false, skipped: [] }, 'nothing is folded, nothing throws')
-  assert.equal(engine.calls.length, 1)
-  assert.equal(ctl.starts.length, 1, 'a terminal task starts no generation')
+  assert.equal(engine.calls.length, 0, 'still nothing reached the engine')
+  assert.equal(ctl.starts.length, 1, 'the late text is not a second generation')
 })
 
 // ---------------------------------------------------------------------------
@@ -693,7 +697,7 @@ test('an external replacement between the state read and the task resolves as in
   assert.equal(ctl.starts.length, 1)
   assert.match(
     member(logs, 0),
-    /folding T2 is skipped for this process: region is inconsistent: a boundary node is not on the surface/,
+    /folding T2 is skipped at surface version \d+: region is inconsistent: a boundary node is not on the surface/,
   )
   // The fresh projection translates the cut, so the task is still foldable: a transient external
   // replacement costs it every future pass in this process. Reported as a finding, not fixed.
@@ -757,12 +761,13 @@ test('a pending summary whose region moved under it is dropped as inconsistent',
   assert.deepEqual(report.skipped, ['T2'])
   assert.match(
     member(logs, 2),
-    /folding T2 is skipped for this process: region is inconsistent: a boundary node is not on the surface/,
+    /folding T2 is skipped at surface version \d+: region is inconsistent: a boundary node is not on the surface/,
   )
   assert.equal(engine.calls.length, 2, 'only the two failed queued attempts reached the engine')
-  const fresh = resolveRegion(/** @type {any} */ (sim.state.tasks.T2), sim.nodes)
-  assert.equal(fresh.kind, 'fold', 'the translated region would still fold')
+  // The skip belongs to the surface version it was decided at: once that moves, the task is examined
+  // again and the dropped summary is regenerated instead of waiting forever (docs/08 F9).
+  sim.work(2)
   const after = await runner.pass(agent, undefined, true)
-  assert.deepEqual(after.skipped, [])
-  assert.equal(ctl.starts.length, 1, 'the dropped text is not regenerated after a process skip')
+  assert.ok(ctl.starts.length > 1, 'a task skipped at one epoch is tried again at the next')
+  assert.notEqual(after.skipped.includes('T2'), true, 'the same surface version is not skipped twice')
 })

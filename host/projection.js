@@ -43,6 +43,7 @@ export function initialState() {
     pendingSummary: null,
     hintKey: null,
     lastHeaderSeq: null,
+    surfaceEpoch: 0,
   }
 }
 
@@ -240,8 +241,10 @@ function applyReplace(state, event, op) {
     const row = folds[foldIndex]
     if (row && row.nodeSeq === null) folds = replaceAt(folds, foldIndex, { ...row, nodeSeq: event.seq })
   }
-  if (tasks === state.tasks && folds === state.folds && pendingSummary === state.pendingSummary) return state
-  return { ...state, tasks, folds, pendingSummary }
+  // The epoch moves even when no task was touched: a replacement that only removed a neighbouring
+  // node still changed the surface another consumer may have observed (docs/10 §4.1). A missing
+  // field is a checkpoint written before the epoch existed, so it starts from zero.
+  return { ...state, tasks, folds, pendingSummary, surfaceEpoch: (state.surfaceEpoch ?? 0) + 1 }
 }
 
 // ---------------------------------------------------------------------------
@@ -522,6 +525,15 @@ export function parseState(value) {
   if (value.pendingSummary !== null && !Number.isInteger(value.pendingSummary)) fail('pendingSummary')
   if (value.hintKey !== null && typeof value.hintKey !== 'string') fail('hintKey')
   if (value.lastHeaderSeq !== null && !Number.isInteger(value.lastHeaderSeq)) fail('lastHeaderSeq')
+  // A checkpoint written before the epoch existed has no field; the reducer starts it from zero and
+  // every replacement after that is counted, so an old log still replays.
+  if (value.surfaceEpoch !== undefined) {
+    const epoch = value.surfaceEpoch
+    if (epoch === null || typeof epoch !== 'number' || !Number.isInteger(epoch) || epoch < 0)
+      fail('surfaceEpoch')
+  }
+  // No copy: callers compare states by reference (`parseState(state) === state`), and a missing
+  // epoch is defaulted by the reducer, not here.
   return /** @type {State} */ (/** @type {unknown} */ (value))
 }
 

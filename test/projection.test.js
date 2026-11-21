@@ -530,12 +530,15 @@ test('replace ops on non-surface events or with malformed ranges are ignored', (
   assert.equal(apply(state, { type: 'tool/result', seq: 3, surfaceOp: other }), state)
 })
 
-test('a replacement with no pending fold row and no tracked cuts changes nothing', () => {
+test('a replacement with no pending fold row and no tracked cuts changes only the epoch', () => {
   const sim = new Sim()
   sim.work()
   const before = sim.state
   sim.prune(/** @type {number} */ (sim.nodes[sim.nodes.length - 1]))
-  assert.equal(sim.state, before)
+  assert.equal(sim.state.tasks, before.tasks, 'no task was translated')
+  assert.equal(sim.state.folds, before.folds)
+  assert.equal(sim.state.surfaceEpoch, before.surfaceEpoch + 1, 'the surface version moved anyway')
+  assert.equal(sim.state.surfaceEpoch, 1)
 })
 
 test('a replacement without sourceEventSeqs translates nothing', () => {

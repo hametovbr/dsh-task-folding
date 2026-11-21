@@ -464,7 +464,10 @@ test('a throwing tool-pairing check skips the task once and never folds it', asy
     assert.equal(engine.calls.length, 0, 'the refused task never reaches foldRegion')
     assert.equal(sim.state.tasks.T1?.status, 'queued', 'the task waits, it is not folded')
     assert.equal(logs.length, 1, 'the violation is reported exactly once')
-    assert.match(at(logs, 0), /folding T1 is skipped for this process: region is not tool-pairing balanced/)
+    assert.match(
+      at(logs, 0),
+      /folding T1 is skipped at surface version \d+: region is not tool-pairing balanced/,
+    )
 
     // Skipped for the rest of the process: no second check, no second line.
     const second = await runner.pass(agent, undefined, true)
@@ -570,18 +573,30 @@ test('a synchronous delegate throw becomes one failed generation, not an unhandl
   })
   assert.deepEqual(reasons, [], 'a synchronous throw must not surface as an unhandled rejection')
   assert.equal(failing.starts(), 1)
-  assert.equal(logs.length, 1, 'the failed generation is named once')
+  // The throw settles on a microtask, so the same pass may already see it (the snapshot is re-read
+  // after phase 1). The invariant is one naming and one durable record per failed generation, not
+  // which side of a boundary they land on.
+  assert.equal(logs.filter((line) => /no delegate summary for T1/.test(line)).length, 1, 'named once')
   assert.match(at(logs, 0), /no delegate summary for T1: the summarizer threw synchronously/)
   assert.equal(engine.calls.length, 0, 'nothing reached foldRegion')
-  assert.deepEqual(engine.rejects, [], 'the durable record happens at the next boundary')
-  assert.equal(sim.state.tasks.T1?.status, 'delegate')
+  assert.ok(engine.rejects.length <= 1)
 
-  // The generated failure is converted into exactly one durable record through recordFailure.
-  await runner.pass(agent, undefined, true) // boundary 2
-  assert.equal(engine.rejects.length, 1)
-  assert.equal(sim.state.tasks.T1?.failures, 1)
-  assert.equal(sim.state.tasks.T1?.status, 'delegate')
-  assert.equal(engine.calls.length, 0)
+  // Every failed generation becomes exactly one durable record and one named line; how many
+  // boundaries that takes is an implementation detail (the pass may record in the same one).
+  let boundaries = 1
+  while (sim.state.tasks.T1?.status === 'delegate' && boundaries < 6) {
+    await runner.pass(agent, undefined, true)
+    boundaries += 1
+    assert.equal(engine.rejects.length, sim.state.tasks.T1?.failures, 'one record per counted failure')
+    assert.equal(engine.calls.length, 0, 'nothing reached foldRegion')
+  }
+  assert.equal(engine.rejects.length, 3, 'the cap is three')
+  assert.equal(sim.state.tasks.T1?.status, 'failed')
+  assert.equal(
+    logs.filter((line) => /no delegate summary for T1/.test(line)).length,
+    3,
+    'each failed generation is named exactly once',
+  )
 })
 
 // ---------------------------------------------------------------------------

@@ -89,6 +89,7 @@
  * @property {number | null} pendingSummary index of a FoldRow waiting for its replacement
  * @property {string | null} hintKey
  * @property {number | null} lastHeaderSeq
+ * @property {number} surfaceEpoch version of the surface node list; increments on every replacement
  */
 
 /**

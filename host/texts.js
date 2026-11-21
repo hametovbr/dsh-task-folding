@@ -5,6 +5,7 @@
 
 export const PROMPT_SECTION =
   'Task folding. Wrap each unit of work that has a verifiable outcome in task_begin … task_end. ' +
+  'Call task_begin in its own message, before the work it covers. ' +
   'A single lookup is a step, not a task. When a unit has distinct parts, open a subtask for each part. ' +
   "task_end replaces the task's messages with your summary, so close a task as soon as its outcome is " +
   'clear and put in the summary everything you will still need: decisions, changed paths and values, ' +

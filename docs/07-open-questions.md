@@ -8,16 +8,17 @@ Each question names the assumption, why it matters, and how it was (or will be) 
 | [Q2](#q2) | `meta` durability | Answered — confirmed |
 | [Q3](#q3) | Idle scheduling | Answered — confirmed; design changed (ADR 0006) |
 | [Q4](#q4) | Module resolution | Answered — layout-dependent; peers are not linked (M2) |
-| [Q5](#q5) | Checkpoint framing | Open (M7) |
-| [Q6](#q6) | Deferred `fold_recall` | Open (M7) |
+| [Q5](#q5) | Checkpoint framing | Answered (M7): the host owns it |
+| [Q6](#q6) | Deferred `fold_recall` | Answered (M7): rejected — it costs the tool's discoverability |
 | [Q7](#q7) | Loader row, dock slot | Answered — confirmed |
 | [Q8](#q8) | Replacement events | Answered — confirmed, with precisions |
 | [Q9](#q9) | Concurrency in a batch | Answered — refuted (sequential) |
 | [Q10](#q10) | Implicit per-turn task | Open (after M7) |
 | [Q11](#q11) | Recording a failed delegate generation | Answered — confirmed live in M5 |
 | [Q12](#q12) | Source of `system`/`tools` for delegate requests | Answered — request mirrors the host's; measured by `scripts/verify-cache.js` |
-| [Q13](#q13) | Collapsing an `outer` task after its children folded | Open (M7) |
-| [Q15](#q15) | The model packs `task_begin` together with the first work calls | Open (M6 hint or M7 prompt) |
+| [Q13](#q13) | Collapsing an `outer` task after its children folded | Answered (M7): keep `below-floor` |
+| [Q14](#q14) | Re-checking a `below-floor` verdict after later folds | Answered (M7): final |
+| [Q15](#q15) | The model packs `task_begin` together with the first work calls | Answered — M7 prompt line, measured live (3/3; large-span run folded) |
 
 <a id="q1"></a>
 ## Q1 — PTC (`run_code`) calls
@@ -50,13 +51,37 @@ Each question names the assumption, why it matters, and how it was (or will be) 
 ## Q5 — Checkpoint framing for mid-history folds
 
 **Assumption:** the host frames every summary with a preamble written for head-of-history checkpoints ("…Continue the task directly from the messages that follow…"; confirmed verbatim in M0 journals). For a mid-history fold this is slightly misleading.
-**Settle:** evaluate in M7; include a framing option in the upstream proposal (M8).
+**Answered (M7):** the framing is not ours to write. `CHECKPOINT_PREAMBLE` is a module constant in
+`@deepseek-ai/dsh-compaction-basic/src/summarizer.ts:70`, and `frameSummary` (ibid. ~190) wraps
+whatever a `summarize()` returns; this plugin's `summarize()` hands back the model's blocks and the
+host adds the preamble around them. Supplying a different framing would mean reaching past the
+documented hook into host internals.
+**Judged harmless as used:** "build on it without restating it" and "continue the task directly" stay
+right when the folded span sits mid-history; only "the messages that follow" shifts meaning from the
+start of a conversation to the next piece of work, and the M3/M5 sessions read it that way.
+**Left for M8:** the upstream proposal asks for a `framing` field on the compaction contract, so a
+host — not a plugin — can say where the span sat.
 
 <a id="q6"></a>
 ## Q6 — Deferred loading of `fold_recall`
 
 **Assumption:** `deferLoading: true` saves ~210 tokens per request at the cost of a lookup on first use.
-**Settle:** M7.
+**Measured (M7):** the saving is real — the `fold_recall` schema is 833 characters, ≈ 208 tokens, and
+the always-on surface drops 2,979 → 2,146 characters (≈ 745 → 536 tokens, host-priced). The cost is
+not "a lookup on first use", it is the tool disappearing from the model's view: in 0.2.2-rc.5 a
+deferred tool registered before the first request never gets the `tool_addition` block that would load
+its definition (`dsh-agent-loop/src/agent.ts:699–707` emits it only for a tool absent from the previous
+header; `dsh-llm/src/content.ts:468–469` says a deferred baseline tool still needs its first addition),
+so the description and the parameter schema never enter context.
+**Live check:** with the flag set, the model asked to "use fold_recall to list the folds" answered with
+three `bash` calls and never touched the tool; with the flag removed in the same session shape, its
+first call was `fold_recall`. One run each way, so treat it as a strong signal rather than a
+measurement — but the mechanism is the host's, and the direction is not in doubt.
+**Answered (M7): not deferred.** 208 tokens against a tool the model no longer knows is a bad trade;
+the always-on surface stays at ≈ 745 tokens (04 §4), which is still a third of taskfold's.
+**Revisit when** the host can activate a deferred baseline tool (a tool-search call, or a
+`tool-addition` producer for tools in the first header); then this is a one-line change in
+`host/tools.js` plus re-pinning `test/prompt-budget.test.js`.
 
 <a id="q7"></a>
 ## Q7 — One Loader row for Host + Client, and the dock slot
@@ -108,10 +133,26 @@ only their two summary nodes and its own closing batch — 1,859 tokens — so t
 (`estTokens − summaryTokens ≥ minSpanTokens`, 03 §6.2) made it `below-floor`. That is consistent with
 the design, but it means a three-level session leaves the outer task unfolded while its children are
 folded.
-**Open:** whether to collapse such a span anyway (it saves little context but flattens the tree), or to
-lower the floor for a span that consists only of fold nodes.
-**Settle:** M7, with the evaluation data ([08](08-followups.md) Q13).
+**Answered (M7): keep `below-floor`.** Collapsing here buys less than the floor exists to protect: the
+span is two summary nodes plus one closing batch, so the saving is a few hundred tokens at best, while
+the cost is real — a summary of summaries loses exactly the file paths and decisions that
+`fold_recall` exists to bring back, and it would add a second fold level over content that is already
+condensed. The floor is also what keeps the tree stable: a rule such as "fold anyway when the span is
+only fold nodes" needs every node tagged with its origin, a new node class in the projection, and a
+second floor for the resulting summary. Not worth it for ~1.9k tokens; recorded so the next person
+does not re-litigate it.
 
+<a id="q14"></a>
+## Q14 — Re-checking a `below-floor` verdict after later folds
+
+**Observed:** a task closes `below-floor` because its span is smaller than `minSpanTokens`. A later
+fold of a *neighbour* can shrink the surface around it, but the task's own span is fixed at its cuts —
+so the verdict cannot become "foldable" by waiting. Only a partial replacement inside the span would
+change the arithmetic, and that replacement also makes the span stale.
+**Answered (M7): the verdict is final.** Re-checking would mean revisiting every `below-floor` task on
+every boundary (O(tasks) on the hot path) to catch a case the cuts make impossible. The verdict is
+also durable in the log; rewriting it later would make two sessions with the same events report
+different fold counts.
 <a id="q15"></a>
 ## Q15 — The model packs `task_begin` together with its first work calls
 
@@ -124,3 +165,20 @@ what follows its begin batch); the discipline is not.
 **Options:** a prompt line asking for `task_begin` on its own; a hint when a task closes with an empty
 span; or (design change) treating a batch that contains `task_begin` as part of the span.
 **Settle:** M6 (hint) and M7 (prompt wording), with the evaluation data.
+**Answer (M7).** The prompt line is `Call task_begin in its own message, before the work it covers.`
+— the section is 664 of 800 characters and the whole prompt surface 2,979 of 3,400
+([04 §3–4](04-tools-and-prompt.md#3-system-prompt-section)); the hint was not needed. Live, three
+fresh headless sessions on a scratch profile (`staleTaskSteps: 5`), the same prompt on two 7-line
+files: in every run the `task_begin` call and result were in step 1 while both `read` results arrived
+in step 2 — run 1 `049cf597` begin result at seq 21 vs read results 28/29, run 2 `6a75a23a` 20 vs
+28/29, run 3 `e2e4420e` 21 vs 32/33 (step 1 there also carried an unrelated `bash ls`, so that call is
+outside the span too). The task's `beginCut`/`spanStart` therefore bracket the reads, and the M5 shape
+did not reproduce. All
+three still closed `below-floor` (estTokens 380, 366, 346): two 7-line files are far below the
+2,000-token floor, so that is the economy rule doing its job, not the defect. A supplementary run on
+two 247-line files (same profile and prompt) closed `queued` at 13,619 tokens and folded at the next
+boundary (fold #0, 5 messages, 13,644 tokens), so a task whose span now contains its work folds.
+Three runs are weak evidence: they show the line lands, not how robust it is. A larger sample, a case
+that needs real work before closing, and the same prompt without the line as a control would settle
+it; no control was run here because the instruction forbade forking the repo, so the M5 observations
+quoted above are the baseline.

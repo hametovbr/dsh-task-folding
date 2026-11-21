@@ -10,7 +10,7 @@ This document is the design the implementation follows. Host APIs are referenced
 2. Folding never blocks the agent or the user's next message noticeably (commit p95 < 100 ms per step; summary generation, when needed, runs in the background).
 3. All plugin state is derived from the session log; fork, resume and replay need no plugin-side storage.
 4. Originals are recoverable exactly, from the log only.
-5. The protocol the model must follow is small: three tools, no rules about which calls may share a message, and at most ~850 tokens (3,400 characters) for the prompt section and all tool schemas together.
+5. The protocol the model must follow is small: three tools, at most ~850 tokens (3,400 characters) for the prompt section and all tool schemas together, and one guidance line — call `task_begin` in its own message — that nothing enforces: a `bash` call in the same batch is legal, it simply falls outside the span.
 6. Per-step cost does not grow with log length.
 
 **Non-goals**
@@ -317,6 +317,8 @@ Resolution: `folds[i].summarySeq` → `eventAt(summarySeq).data.shadowedSeqs` �
 
 ## 7. Texts
 
+`fold_recall` is deliberately **not** deferred: the host's `deferLoading` saves its ≈ 208-token schema, but in 0.2.2-rc.5 a deferred tool registered before the first request never receives the `tool_addition` block that would load its definition, and a live run showed the model then not calling it at all (07 Q6). Recall is worth more than 208 tokens.
+
 ### 7.1 System-prompt section
 
 A single `ctx.systemPrompt.section({ name: 'task-folding', order: 650, text })`. Draft and token budget in [04](04-tools-and-prompt.md#3-system-prompt-section).
@@ -383,6 +385,7 @@ All fields are live: `minSpanTokens`, `delegateEnabled`, `minSummaryChars` and `
 | Fork | Inherited prefix replays through `apply`; open tasks continue in the fork. |
 | taskfold installed too | Tool-name collision fails registration; the plugin logs "uninstall dsh-taskfold" and stays inactive. |
 | Summary not smaller than the span | Self path demotes to delegate (in memory); delegate path counts toward the durable cap. |
+| A tool marked `deferLoading` never receives a `tool_addition` in 0.2.2-rc.5 | Its definition stays out of context for the session, so the model may never call it; `fold_recall` is therefore not deferred (07 Q6, measured live). |
 
 ## 12. Invariants (tested)
 

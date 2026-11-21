@@ -28,6 +28,12 @@ test('the prompt section fits its budget', () => {
   assert.ok(PROMPT_SECTION.startsWith('Task folding.'), 'the section announces the discipline first')
 })
 
+// Q15: beginning a task in the same batch as its first work calls leaves the task span empty, so the
+// task closes below the floor and never folds. The fix is this explicit clause; keep it pinned.
+test('the prompt asks for task_begin in its own message', () => {
+  assert.match(PROMPT_SECTION, /task_begin in its own message, before the work it covers\./)
+})
+
 test('each tool schema fits its budget', () => {
   for (const tool of toolDefinitions()) {
     const size = JSON.stringify({

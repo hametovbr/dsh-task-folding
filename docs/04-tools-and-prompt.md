@@ -144,20 +144,20 @@ Defined in [03 §4.1](03-architecture.md#41-meta-payloads-durable-written-by-the
 `ctx.systemPrompt.section({ name: 'task-folding', order: 650, text })`. Draft:
 
 ```
-Task folding. Wrap each unit of work that has a verifiable outcome in task_begin … task_end. A single lookup is a step, not a task. When a unit has distinct parts, open a subtask for each part. task_end replaces the task's messages with your summary, so close a task as soon as its outcome is clear and put in the summary everything you will still need: decisions, changed paths and values, failures and their causes. Report to the user as usual; the report may come before or after task_end. When a summary does not answer a concrete question, read the originals with fold_recall instead of guessing.
+Task folding. Wrap each unit of work that has a verifiable outcome in task_begin … task_end. Call task_begin in its own message, before the work it covers. A single lookup is a step, not a task. When a unit has distinct parts, open a subtask for each part. task_end replaces the task's messages with your summary, so close a task as soon as its outcome is clear and put in the summary everything you will still need: decisions, changed paths and values, failures and their causes. Report to the user as usual; the report may come before or after task_end. When a summary does not answer a concrete question, read the originals with fold_recall instead of guessing.
 ```
 
 ## 4. Token budget
 
 | Part | Characters (draft) | Budget |
 |---|---|---|
-| Prompt section | 601 | ≤ 800 |
+| Prompt section | 664 | ≤ 800 |
 | `task_begin` schema (compact JSON) | 442 | ≤ 500 |
 | `task_end` schema | 1,040 | ≤ 1,100 |
 | `fold_recall` schema | 833 | ≤ 1,000 |
-| **Total** | **2,916 (≈ 730 tokens)** | **≤ 3,400 characters** |
+| **Total** | **2,979 (≈ 745 tokens)** | **≤ 3,400 characters** |
 
-For comparison, taskfold 0.40.1 spends ~8,100 characters (≈ 2,000 tokens) on the same surface. The prompt section plus the two lifecycle tools come to ~2,080 characters (≈ 520 tokens). The `summary` guidance grew in M2's follow-up: live summaries narrated task bookkeeping ("opened T3 and closed it"), wrote empty sections as "None", and ran 800–1,300 characters even for tasks that then stayed below the floor. `fold_recall` is a candidate for `deferLoading: true` once its first-use latency is measured ([07 Q6](07-open-questions.md#q6)). A unit test (`test/prompt-budget.test.js`) fails when the total exceeds the budget.
+For comparison, taskfold 0.40.1 spends ~8,100 characters (≈ 2,000 tokens) on the same surface. The prompt section plus the two lifecycle tools come to ~2,146 characters (≈ 536 tokens). The `summary` guidance grew in M2's follow-up: live summaries narrated task bookkeeping ("opened T3 and closed it"), wrote empty sections as "None", and ran 800–1,300 characters even for tasks that then stayed below the floor. A unit test (`test/prompt-budget.test.js`) fails when the total exceeds the budget; `test/defer-loading.test.js` pins the flag and the bytes of the rest of the surface.
 
 ## 5. Hint text
 

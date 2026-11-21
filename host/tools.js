@@ -200,6 +200,7 @@ export function createTools(deps) {
   const recall = {
     name: 'fold_recall',
     description: texts.FOLD_RECALL_DESCRIPTION,
+    // A lookup aid, not the discipline: the prompt section already names the tool, so the host
     parameters: {
       type: 'object',
       properties: {

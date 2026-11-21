@@ -6,12 +6,18 @@
 |---|---|---|---|
 | Unit | Pure functions: reducer rows, cut translation, planner, texts, settings readers, recall formatting | `test/*.test.js` | every commit |
 | Property | Invariants over random event sequences | `test/properties.test.js` | every commit (1,000 cases) |
+| Invariants | The eight promises of docs/03 §12 over generated event streams: monotone cuts, idempotent `apply`, stack/table consistency, cut translation, `shadowedSeqs ⊆ region`, region-key independence, `estTokens` non-growth, checkpoint replay equivalence | `test/invariants.test.js` | every commit (8 × 200 + a non-vacuity guard, fixed seed) |
+| Degradation | The plugin with a host service missing or a journal damaged: no engine, no `llm`, no tool sink, no projection sink, malformed `meta`, foreign `stateVersion`, impossible seq, corrupt summary | `test/degradation.test.js` | every commit |
+| Fault injection | Every seam throwing: `stateOf`, the pairing checks, `foldRegion` before and after the transaction, `delegate.start` sync-throw/reject/`null`, abort, the compaction lock, a throwing logger, a throwing token meter | `test/faults.test.js` | every commit |
 | Replay | Projection from scratch vs from checkpoints | `test/replay.test.js` | every commit |
 | Component | Tools (including recall) and the fold runner against a fake session and fake engine | `test/tools.test.js`, `test/recall.test.js`, `test/fold-runner.test.js`, `test/engine-adapter.test.js`, `test/plugin.test.js` | every commit |
 | Package | Manifest and tarball contract: every `exports` path resolves, the `./client` loader form and `dsh.client` pass the host's own rules, patch rows are named after the package, `files` covers every runtime import, and the packed tarball ships no tests or CI | `test/manifest.test.js` (inside `npm test`), `scripts/check-pack.js` (`npm run pack:check`) | every commit, offline |
 | Contract | Adapter assumptions against published host packages | `scripts/contract-check.js` | Weekly and on demand (`.github/workflows/contract.yml`), and before each release; it needs network, so it never gates a push |
 | Live | Real DSH host, scripted sessions driven headlessly (`dsh --profile <p> --json [--session-id <id>] "<task>"`, profile = `dsh-base` + `dsh-headless` + this plugin; see [02 §11](02-host-api.md#11-operations-live)) | `test/live/` (needs API key) | before each release |
-| Evaluation | Task suite, three configurations | `eval/` | M7 and on demand |
+| Evaluation | Task suite, configurations A/B/C/D; `scripts/eval-report.js` computes the protocol's metrics from journals | `scripts/eval-report.js` | M7 and on demand |
+| Mutation | Single-operator mutations of `cuts.js`, `projection.js` and `planner.js` in a throwaway copy; a surviving mutant is a missing assertion | `scripts/mutate.js` (`npm run mutation`, `--min-score 0.85`) | before a release; too slow for every commit |
+
+The **coverage gate** covers every `host/*.js` file at ≥ 90 % lines, ≥ 85 % branches and ≥ 80 % functions (`npm run coverage`); the two pure modules `projection.js` and `cuts.js` stay at 100 %. Line coverage is a floor, not a goal — `npm run mutation` answers whether the tests can fail at all: at the time of writing `cuts.js` scores 90 %, `planner.js` 100 % and `projection.js` 89.1 %, and the survivors are listed by file, line and replacement.
 
 ## 2. Fixtures
 

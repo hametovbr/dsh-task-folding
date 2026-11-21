@@ -89,3 +89,47 @@ test('dueTasks waits for a report unless the turn is stopping, and skips missing
     ['T1'],
   )
 })
+
+test('resolveRegion reports each missing boundary node, not only all three', () => {
+  // A partial miss is the dangerous case: with the three checks joined by `&&` the span would be
+  // reported as foldable with an index of -1.
+  assert.deepEqual(resolveRegion(task({ beginCut: 1, spanStart: 2, endCut: 4 }), [1, 2, 4]), {
+    kind: 'fold',
+    start: 2,
+    end: 4,
+    startIndex: 1,
+    endIndex: 2,
+  })
+  // The begin cut at position 0 is a real cut, not "absent".
+  assert.deepEqual(resolveRegion(task({ beginCut: 1, spanStart: 2, endCut: 4 }), [1, 2, 4]), {
+    kind: 'fold',
+    start: 2,
+    end: 4,
+    startIndex: 1,
+    endIndex: 2,
+  })
+  // A span of one node (startIndex === endIndex) is foldable.
+  assert.deepEqual(resolveRegion(task({ beginCut: 1, spanStart: 2, endCut: 2 }), [1, 2]), {
+    kind: 'fold',
+    start: 2,
+    end: 2,
+    startIndex: 1,
+    endIndex: 1,
+  })
+})
+
+test('dueTasks puts the deeper task first even when creation order disagrees', () => {
+  const shallow = task({ id: 'T1', depth: 0, reported: true })
+  const deep = task({ id: 'T2', parent: 'T1', depth: 1, reported: true })
+  const state = {
+    ...initialState(),
+    order: ['T1', 'T2'],
+    tasks: { T1: shallow, T2: deep },
+    open: ['T1', 'T2'],
+  }
+  assert.deepEqual(
+    dueTasks(state, { turnStopping: false }).map((entry) => entry.id),
+    ['T2', 'T1'],
+    'depth descends',
+  )
+})

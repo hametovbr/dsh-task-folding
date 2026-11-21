@@ -18,7 +18,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const WORK = join(ROOT, '.tmp', 'mutation')
+// One directory per run: two authors (or two shells) must not delete each other's copy mid-flight.
+const WORK = join(ROOT, '.tmp', `mutation-${process.pid}`)
 
 /** @typedef {{ target: string, tests: string[] }} Target */
 /** @typedef {{ line: number, from: string, to: string, mutated: string }} Mutant */

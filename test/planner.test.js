@@ -133,3 +133,39 @@ test('dueTasks puts the deeper task first even when creation order disagrees', (
     'depth descends',
   )
 })
+
+test('resolveRegion accepts a span whose begin cut is the first surface node', () => {
+  // `indexOf` returning 0 is a real position, not "absent" (a mutant `=== -1 -> === 0` refuses it).
+  assert.deepEqual(resolveRegion(task({ beginCut: 7, spanStart: 8, endCut: 9 }), [7, 8, 9]), {
+    kind: 'fold',
+    start: 8,
+    end: 9,
+    startIndex: 1,
+    endIndex: 2,
+  })
+  assert.deepEqual(resolveRegion(task({ beginCut: 7, spanStart: 8, endCut: 9 }), [0, 7, 8, 9]), {
+    kind: 'fold',
+    start: 8,
+    end: 9,
+    startIndex: 2,
+    endIndex: 3,
+  })
+})
+
+test('dueTasks orders by depth before close order, with a disagreement between them', () => {
+  // `a - b -> a + b` in the comparator stays truthy for any pair and would fall through to the
+  // next key; this pair makes the two keys disagree so the depth key has to win.
+  const deepLate = task({ id: 'T1', depth: 2, endMsgSeq: 90, reported: true })
+  const shallowEarly = task({ id: 'T2', depth: 0, endMsgSeq: 10, reported: true })
+  const state = {
+    ...initialState(),
+    order: ['T2', 'T1'],
+    tasks: { T1: deepLate, T2: shallowEarly },
+    open: ['T1'],
+  }
+  assert.deepEqual(
+    dueTasks(state, { turnStopping: false }).map((entry) => entry.id),
+    ['T1', 'T2'],
+    'the deeper task comes first even though the shallow one closed earlier',
+  )
+})

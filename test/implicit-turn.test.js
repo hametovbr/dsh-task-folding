@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { SpanEstimator } from '../host/domain/estimate.js'
+import { implicitTurnSpan } from '../host/domain/planner.js'
 import { defaults } from '../host/domain/settings.js'
 import { createFoldRunner } from '../host/runtime/scheduler.js'
 import { Sim } from './fixtures/sim.js'
@@ -650,4 +651,62 @@ test('a busy lock keeps the generated text for the next boundary', async () => {
   assert.equal(engine.calls.length, 1, 'the next boundary committed the kept text')
   assert.equal(sim.state.folds.length, 1)
   assert.equal(at(sim.state.folds, 0).taskId, null)
+})
+
+test('a turn that starts at the very first surface node is still foldable', () => {
+  // `turnStartSeq` is a seq, and the host numbers events from zero: a boundary at 0 is a real
+  // position, not "absent" (a mutant `start < 0 -> start < 1` would refuse this turn).
+  const sim = new Sim()
+  turnStart(sim)
+  const first = /** @type {number} */ (sim.nodes[0])
+  assert.equal(typeof first, 'number')
+  const state = { ...sim.state, turnStartSeq: 0, turnFolded: false }
+  const settings = { ...defaults(), minSpanTokens: 0 }
+  const span = implicitTurnSpan(state, sessionOf(sim), settings, new SpanEstimator(fakeMeter()))
+  assert.deepEqual(span, { startSeq: 0, endSeq: sim.nodes.at(-1) })
+})
+
+test('a boundary that is not on the surface has no span', () => {
+  const sim = new Sim()
+  const state = { ...sim.state, turnStartSeq: 999_999, turnFolded: false }
+  assert.equal(
+    implicitTurnSpan(
+      state,
+      sessionOf(sim),
+      { ...defaults(), minSpanTokens: 0 },
+      new SpanEstimator(fakeMeter()),
+    ),
+    null,
+  )
+})
+
+test('a turn that starts at the last node has a one-node span, not none', () => {
+  const sim = new Sim()
+  const last = /** @type {number} */ (sim.nodes.at(-1))
+  assert.equal(typeof last, 'number')
+  const state = { ...sim.state, turnStartSeq: last, turnFolded: false }
+  const settings = { ...defaults(), minSpanTokens: 0 }
+  assert.deepEqual(implicitTurnSpan(state, sessionOf(sim), settings, new SpanEstimator(fakeMeter())), {
+    startSeq: last,
+    endSeq: last,
+  })
+})
+
+test('a turn whose span is exactly at the floor is still folded', () => {
+  // `tokens < floor` must be strict: equality folds (a mutant `<=` would refuse the boundary).
+  const sim = new Sim()
+  turnStart(sim)
+  const first = sim.user('turn request')
+  assert.equal(typeof first, 'number')
+  sim.work(2)
+  const state = { ...sim.state, turnStartSeq: /** @type {number} */ (first), turnFolded: false }
+  const estimator = new SpanEstimator(fakeMeter())
+  const nodes = sessionOf(sim).surface.nodes
+  const startIndex = nodes.indexOf(first)
+  const tokens = estimator.regionTokens(sessionOf(sim), nodes, startIndex, nodes.length - 1)
+  const settings = { ...defaults(), minSpanTokens: tokens }
+  assert.deepEqual(implicitTurnSpan(state, sessionOf(sim), settings, estimator), {
+    startSeq: first,
+    endSeq: nodes.at(-1),
+  })
 })

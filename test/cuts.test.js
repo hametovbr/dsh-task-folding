@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { ABSORBED, isAbsorbed, translateAfter, translateFirst, translateTask } from '../host/cuts.js'
+import { ABSORBED, isAbsorbed, translateAfter, translateFirst, translateTask } from '../host/domain/cuts.js'
 
-/** @type {import('../host/types.js').ReplaceOp} */
+/** @type {import('../host/domain/types.js').ReplaceOp} */
 const op = { op: 'replace', startSeq: 10, endSeq: 20 }
 const shadowed = new Set([10, 12, 15, 20])
 const R = 30
@@ -31,8 +31,8 @@ test('translateFirst moves a span start that the replacement starts at and absor
   assert.equal(translateFirst(12, shadowed, op, R), ABSORBED)
 })
 
-/** @returns {import('../host/types.js').Task} */
-function task(/** @type {Partial<import('../host/types.js').Task>} */ fields) {
+/** @returns {import('../host/domain/types.js').Task} */
+function task(/** @type {Partial<import('../host/domain/types.js').Task>} */ fields) {
   return {
     id: 'T1',
     title: 't',

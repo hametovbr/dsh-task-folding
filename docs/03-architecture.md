@@ -72,28 +72,59 @@ Every closed task gets exactly one terminal or pending verdict:
 
 ```
 host/
-  index.js            plugin object: inject, Config, apply()
-  projection.js       pure reducer + schema + wire view + surfaceEpoch (no ctx, no I/O)
-  cuts.js             cut translation helpers                      (pure)
-  planner.js          due-task selection and region resolution     (reads surface)
-  tools.js            task_begin / task_end / fold_recall          (execute + render + meta)
-  fold-runner.js      runs due folds from pre-step / turn-stopping; delegate scheduling
-  runtime/session-runtime.js  one SessionRuntime per session and a pure transition reducer
-  plugin/pre-step.js  the single pre-step orchestrator: fold -> hint -> decision
-  ports/compaction.js the port (fold/reject/classify); compaction-native.js is the upstream stubs
-  ports/compaction-shim.js the ONLY module touching dsh-compaction-basic internals
-  ports/logger.js     a logger that never throws;  ports/clock.js the clock seam
-  summarizer.js       delegate path: prefix-anchored request, instruction, validation
-  recall.js           index, range, grep over a fold's shadowed messages
-  hints.js            stale-task and empty-span hints, durable latch
-  estimate.js         span token estimate via ctx.tokenMeter.estimateMessage
-  settings.js         Config schema and safe readers
+  index.js            thin entry: re-exports the plugin object, Config, inject and the pinned names
+  domain/
+    types.js          shared JSDoc shapes (no runtime code)
+    journal.js        event classification: surface / task-result / compaction / header / hint / batch
+    surface.js        SurfaceSnapshot { state, nodes, epoch }: the versioned observation
+    projection.js     pure reducer + schema + wire view + surfaceEpoch (no ctx, no I/O)
+    cuts.js           cut translation helpers                       (pure)
+    planner.js        due-task selection and region resolution      (reads surface)
+    verdict.js        decideVerdict / normalizeTitle: the economy rule (pure)
+    estimate.js       span token estimate via ctx.tokenMeter.estimateMessage
+    texts.js          every model-facing string                      (leaf)
+    settings.js       Config schema and safe readers
+  ports/
+    host-services.js  the only module that calls ctx.tools / sessionProjections / systemPrompt,
+                      reads ctx.get / tokenMeter / logger, and resolves a host package
+    compaction.js     the port (fold/reject/classify); compaction-native.js is the upstream stub
+    compaction-shim.js the ONLY module touching dsh-compaction-basic internals
+    llm.js            delegate path: prefix-anchored request, instruction, validation
+    logger.js         a logger that never throws;  clock.js the clock seam
+  runtime/
+    session-runtime.js  one SessionRuntime per session and a pure transition reducer
+    scheduler.js        createFoldRunner: the pass loop, ordering and retry policy
+    generation.js       deferred delegate generation: start, settle, commit, failure record
+  tools/
+    index.js          createTools: composes the three tools and owns the shared direct-call guard
+    meta.js           the tf payload writer (the projection owns the validating reader)
+    task-begin.js     task_begin
+    task-end.js       task_end (uses domain/verdict)
+    recall.js         fold_recall over a fold's shadowed messages
+  prompt/
+    section.js        the prompt section registration and its byte budget
+    hints.js          stale-task and empty-span hints, durable latch (pure)
+  plugin/
+    mount.js          the apply body: registration of projection, tools, prompt and hooks
+    index.js          the plugin object: name, inject, Config, apply
+    pre-step.js       the single pre-step orchestrator: fold -> hint -> decision
 client/
-  index.js            dock + settings card
-  client.locale.generated.js  the dictionary generated from locale/en.json
+  module.js                   the loader entry: chunks, locale registration, slot wiring
+  client.dock.js              the dock component (package-local chunk)
+  client.settings-card.js     the settings card (package-local chunk)
+  client.locale.generated.js  the dictionary generated from locale/en.json (package-local chunk)
 ```
 
-Dependency direction: `projection`, `cuts` are leaves; `planner`, `recall`, `hints`, `estimate` read the projection and the session; `runtime` is pure state and transitions over the projection; `tools`, `fold-runner` and `plugin/pre-step` orchestrate; only `ports/compaction-shim`, `ports/llm`-shaped `summarizer` know about compaction internals or the LLM, and only `ports/` reaches the host.
+The `client.*` prefix on the three chunk files is the host's package-local chunk contract
+(`/^client\.[A-Za-z0-9][A-Za-z0-9._-]*\.js$/` in `@deepseek-ai/dsh-client-modules`): the loader serves a
+sibling file only when its name matches, so the file names cannot be `dock.js`/`settings-card.js`. The
+entry is `module.js` because the host reads its path from `exports["./client"]` and always publishes it as
+`<package>/client.js`.
+
+Dependency direction: `domain/` imports nothing but itself (`texts.js` is a leaf); `ports/` is the only
+layer reaching a `@deepseek-ai` package or a host service; `runtime/` imports `domain/` and the port types;
+`tools/` and `prompt/` build on `domain/` (and `tools/` uses `domain/verdict.js`); `plugin/` is the only
+place that receives `ctx`, and it does so only through `ports/host-services.js`.
 
 ## 4. Data model
 
@@ -125,7 +156,7 @@ The summary text itself is NOT copied into meta: it already lives in the `task_e
 
 ### 4.2 Projection state
 
-Key `taskFolding`, `stateVersion: 1`. The authoritative typedefs are in `host/types.js`; this is a summary.
+Key `taskFolding`, `stateVersion: 1`. The authoritative typedefs are in `host/domain/types.js`; this is a summary.
 
 ```ts
 type State = {
@@ -173,7 +204,7 @@ Size: `folds` grows by one row per compaction (tens per long session); `tasks` b
 
 ### 4.3 Reducer
 
-`apply(state, event)` — pure, synchronous, returns the same reference when nothing changes. Implementation: `host/projection.js`.
+`apply(state, event)` — pure, synchronous, returns the same reference when nothing changes. Implementation: `host/domain/projection.js`.
 
 | Event | Transition |
 |---|---|

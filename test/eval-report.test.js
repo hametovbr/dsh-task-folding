@@ -558,7 +558,7 @@ test('the markdown report states the method and shows one table per configuratio
   assert.doesNotMatch(markdown, /undefined|NaN/)
   // The method statement names each non-obvious derivation.
   assert.match(markdown, /charact(er|ters) count of the summary text divided by 4/)
-  assert.match(markdown, /host\/projection\.js/)
+  assert.match(markdown, /host\/domain\/projection\.js/)
   assert.match(markdown, /no number is invented/)
 })
 

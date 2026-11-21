@@ -12,12 +12,12 @@ import { test } from 'node:test'
 
 import { createCompactionPort, resetCompactionPort } from '../host/ports/compaction.js'
 import plugin, { ENGINE_UNAVAILABLE, PLUGIN_NAME } from '../host/index.js'
-import { apply, initialState, parseState, PROJECTION_KEY, STATE_VERSION } from '../host/projection.js'
+import { apply, initialState, parseState, PROJECTION_KEY, STATE_VERSION } from '../host/domain/projection.js'
 
-/** @typedef {import('../host/types.js').SessionEvent} SessionEvent */
-/** @typedef {import('../host/types.js').State} State */
+/** @typedef {import('../host/domain/types.js').SessionEvent} SessionEvent */
+/** @typedef {import('../host/domain/types.js').State} State */
 
-/** The surface-carrying event types (docs/02 §2; host/projection.js:24). */
+/** The surface-carrying event types (docs/02 §2; host/domain/projection.js:24). */
 const SURFACE_TYPES = new Set(['system/message', 'user/message', 'assistant/message', 'tool/result'])
 
 // ---------------------------------------------------------------------------
@@ -303,7 +303,7 @@ function feed(state, events) {
 
 /**
  * The events of one task: a begin batch, its first span node, an end batch and a report message
- * that makes the closed task due (host/planner.js `dueTasks`).
+ * that makes the closed task due (host/domain/planner.js `dueTasks`).
  *
  * @param {string} [verdict]
  * @returns {SessionEvent[]}
@@ -590,7 +590,7 @@ test('a tf meta missing required fields is ignored', () => {
   assertNoTask(stateAfterBeginMeta({ tf: 1, op: 'begin', title: 'no id', parent: null }))
 
   // An end meta with a missing field must not close an open task either: isEndMeta requires the
-  // whole payload (host/projection.js:462-474), and the batch then closes with no transition.
+  // whole payload (host/domain/projection.js:462-474), and the batch then closes with no transition.
   const opened = replay(openTaskScript())
   const state = feed(opened.state, [
     assistant(5, [{ id: 'c2', name: 'task_end' }]),
@@ -673,7 +673,7 @@ test('a foreign-realm log keeps the projection on its own state version and does
 
   // The projection reports its own version and never guesses one from the log: host/index.js:83-92
   // passes `stateVersion: STATE_VERSION` to the registration, and the reducer's meta validators
-  // (host/projection.js:449-456, 462-474) check only tf/op/fields — no meta `stateVersion` is read.
+  // (host/domain/projection.js:449-456, 462-474) check only tf/op/fields — no meta `stateVersion` is read.
   assert.equal(definition.stateVersion, STATE_VERSION)
   assert.equal(definition.stateVersion, 1)
 
@@ -729,7 +729,7 @@ test('a corrupt compaction/summary is not applied and later events still replay'
     ),
   )
   // coversSpan is false and no cut is in the shadowed set, so the fold is not applied
-  // (host/projection.js:215-223, 387-408).
+  // (host/domain/projection.js:215-223, 387-408).
   assert.equal(state.tasks.T1?.status, 'queued', 'the corrupt fold did not fold the task')
   assert.equal(state.folds[0]?.taskId, null, 'the corrupt fold is attributed to no task')
   assert.deepEqual(

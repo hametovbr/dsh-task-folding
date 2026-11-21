@@ -6,9 +6,9 @@ import { test } from 'node:test'
 
 import plugin, { PLUGIN_NAME, PROMPT_ORDER } from '../host/index.js'
 import { createPreStep } from '../host/plugin/pre-step.js'
-import { PROJECTION_KEY, STATE_VERSION, initialState } from '../host/projection.js'
-import { defaults, readSettings } from '../host/settings.js'
-import { PROMPT_SECTION } from '../host/texts.js'
+import { PROJECTION_KEY, STATE_VERSION, initialState } from '../host/domain/projection.js'
+import { defaults, readSettings } from '../host/domain/settings.js'
+import { PROMPT_SECTION } from '../host/domain/texts.js'
 
 /**
  * A Context stand-in that records registrations the way the host services do.

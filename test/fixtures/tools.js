@@ -2,11 +2,11 @@
 // executor does: the assistant message is appended first, then each call is executed in order
 // and its result (with the tool's meta) is committed before the next call starts.
 
-import { SpanEstimator } from '../../host/estimate.js'
-import { defaults, readSettings } from '../../host/settings.js'
-import { createTools } from '../../host/tools.js'
+import { SpanEstimator } from '../../host/domain/estimate.js'
+import { defaults, readSettings } from '../../host/domain/settings.js'
+import { createTools } from '../../host/tools/index.js'
 
-/** @typedef {import('../../host/types.js').SessionEvent} SessionEvent */
+/** @typedef {import('../../host/domain/types.js').SessionEvent} SessionEvent */
 /** @typedef {import('./sim.js').Sim} Sim */
 
 /**

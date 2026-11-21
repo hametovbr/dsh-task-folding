@@ -4,13 +4,13 @@
 // `agent/pre-step` decision; once the host logs it, the projection records `source.key` as
 // `hintKey`, so a restart does not publish it again.
 
-import { ABSORBED } from './cuts.js'
-import { HINT_SOURCE_KIND } from './projection.js'
-import * as texts from './texts.js'
+import { ABSORBED } from '../domain/cuts.js'
+import { HINT_SOURCE_KIND } from '../domain/projection.js'
+import * as texts from '../domain/texts.js'
 
-/** @typedef {import('./settings.js').Settings} Settings */
-/** @typedef {import('./types.js').State} State */
-/** @typedef {import('./types.js').Task} Task */
+/** @typedef {import('../domain/settings.js').Settings} Settings */
+/** @typedef {import('../domain/types.js').State} State */
+/** @typedef {import('../domain/types.js').Task} Task */
 
 /**
  * The message the hint is delivered as. The host logs it as a `user/message`, whose `data` is the

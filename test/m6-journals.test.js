@@ -5,14 +5,14 @@ import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { maybeHint } from '../host/hints.js'
-import { apply, initialState } from '../host/projection.js'
-import { readSettings } from '../host/settings.js'
+import { maybeHint } from '../host/prompt/hints.js'
+import { apply, initialState } from '../host/domain/projection.js'
+import { readSettings } from '../host/domain/settings.js'
 import { journalEvents, readJournalText } from '../scripts/journal.js'
 import { M2_LOGS } from './fixtures/journals.js'
 
-/** @typedef {import('../host/types.js').SessionEvent} SessionEvent */
-/** @typedef {import('../host/types.js').State} State */
+/** @typedef {import('../host/domain/types.js').SessionEvent} SessionEvent */
+/** @typedef {import('../host/domain/types.js').State} State */
 
 const events = journalEvents(readJournalText(join(M2_LOGS, 'm6-hints.jsonl')))
 /** @param {readonly SessionEvent[]} list @param {State} [from] */

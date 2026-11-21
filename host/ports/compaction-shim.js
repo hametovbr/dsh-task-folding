@@ -14,7 +14,7 @@
 // transaction reads; anything else the base class might touch throws instead of silently
 // registering against the realm.
 
-import { loadHostModule } from '../resolve.js'
+import { loadHostModule } from './host-services.js'
 
 /** @typedef {import('./compaction.js').CompactionPort} CompactionPort */
 

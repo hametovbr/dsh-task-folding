@@ -2,6 +2,8 @@
 // apply() returns the same reference for events that change nothing.
 
 import { ABSORBED, isAbsorbed, translateTask } from './cuts.js'
+import { HINT_SOURCE_KIND, classify, replaceOp } from './journal.js'
+import { nextEpoch } from './surface.js'
 
 /** @typedef {import('./types.js').SessionEvent} SessionEvent */
 /** @typedef {import('./types.js').State} State */
@@ -17,11 +19,10 @@ export const PROJECTION_KEY = 'taskFolding'
 export const STATE_VERSION = 1
 export const META_TAG = 1
 export const TASK_TOOLS = Object.freeze(['task_begin', 'task_end'])
-export const HINT_SOURCE_KIND = 'task-folding:hint'
+export { HINT_SOURCE_KIND }
 export const MAX_DELEGATE_FAILURES = 3
 export const RECENT_LIMIT = 5
 
-const SURFACE_TYPES = new Set(['system/message', 'user/message', 'assistant/message', 'tool/result'])
 /** @type {ReadonlySet<TaskStatus>} */
 export const TERMINAL = new Set(['below-floor', 'merged', 'folded', 'absorbed', 'failed'])
 /** @type {ReadonlySet<TaskStatus>} */
@@ -62,31 +63,52 @@ export function init(_header, _inheritedEventCount) {
  * @returns {State}
  */
 export function apply(state, event) {
-  const replace = replaceOp(event)
-  if (replace) return applyReplace(state, event, replace)
-
-  switch (event.type) {
-    case 'assistant/message':
-      return onAssistant(state, event)
-    case 'tool/result':
-      return onToolResult(state, event)
-    case 'user/message':
+  switch (classify(event)) {
+    case 'surface':
+      return onSurface(state, event)
+    case 'hint':
       return onUser(state, event)
-    case 'system/message':
-      return noteSurfaceAppend(state, event.seq)
-    case 'step/end':
+    case 'task-result':
+      return onToolResult(state, event)
+    case 'batch':
       return state.batch ? closeBatch(state) : state
-    case 'compaction/summary':
-      return onCompactionSummary(state, event)
-    case 'compaction/end':
-      return event.data && event.data.error !== undefined && event.data.error !== null
-        ? onCompactionFailure(state)
-        : state
-    case 'request/header':
+    case 'compaction':
+      return onCompaction(state, event)
+    case 'header':
       return { ...state, lastHeaderSeq: event.seq }
     default:
       return state
   }
+}
+
+/**
+ * A surface event: a replacement commits a new version of the node list, an append notes the node
+ * and may carry the model's calls.
+ *
+ * @param {State} state
+ * @param {SessionEvent} event
+ * @returns {State}
+ */
+function onSurface(state, event) {
+  const replace = replaceOp(event)
+  if (replace) return applyReplace(state, event, replace)
+  if (event.type === 'assistant/message') return onAssistant(state, event)
+  if (event.type === 'user/message') return onUser(state, event)
+  return noteSurfaceAppend(state, event.seq)
+}
+
+/**
+ * A compaction row: a summary opens a fold, an errored end counts against every waiting delegate.
+ *
+ * @param {State} state
+ * @param {SessionEvent} event
+ * @returns {State}
+ */
+function onCompaction(state, event) {
+  if (event.type === 'compaction/summary') return onCompactionSummary(state, event)
+  if (event.data && event.data.error !== undefined && event.data.error !== null)
+    return onCompactionFailure(state)
+  return state
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +266,7 @@ function applyReplace(state, event, op) {
   // The epoch moves even when no task was touched: a replacement that only removed a neighbouring
   // node still changed the surface another consumer may have observed (docs/10 §4.1). A missing
   // field is a checkpoint written before the epoch existed, so it starts from zero.
-  return { ...state, tasks, folds, pendingSummary, surfaceEpoch: (state.surfaceEpoch ?? 0) + 1 }
+  return { ...state, tasks, folds, pendingSummary, surfaceEpoch: nextEpoch(state) }
 }
 
 // ---------------------------------------------------------------------------
@@ -408,18 +430,6 @@ function coversSpan(task, op) {
     task.endCut !== ABSORBED &&
     task.endCut === op.endSeq
   )
-}
-
-/**
- * @param {SessionEvent} event
- * @returns {ReplaceOp | null}
- */
-function replaceOp(event) {
-  if (!SURFACE_TYPES.has(event.type)) return null
-  const op = event.surfaceOp
-  if (!op || typeof op !== 'object' || op.op !== 'replace') return null
-  if (typeof op.startSeq !== 'number' || typeof op.endSeq !== 'number') return null
-  return op
 }
 
 /**

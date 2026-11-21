@@ -10,7 +10,7 @@
 // The reducer is total and pure: no session, no clock, no I/O, and no mutation of its input. It is
 // the one place that knows the epoch of a skip, the count behind the backoff and the durable cap.
 
-import { MAX_DELEGATE_FAILURES } from '../projection.js'
+import { MAX_DELEGATE_FAILURES } from '../domain/projection.js'
 
 /** Retry 1, 2, 4, 8 boundaries after an unexpected fold failure (docs/03 §5.3). */
 export const MAX_BACKOFF_BOUNDARIES = 8

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { ABSORBED } from '../host/cuts.js'
-import { dueTasks, resolveRegion } from '../host/planner.js'
-import { initialState } from '../host/projection.js'
+import { ABSORBED } from '../host/domain/cuts.js'
+import { dueTasks, resolveRegion } from '../host/domain/planner.js'
+import { initialState } from '../host/domain/projection.js'
 
-/** @typedef {import('../host/types.js').Task} Task */
+/** @typedef {import('../host/domain/types.js').Task} Task */
 
 /** @returns {Task} */
 function task(/** @type {Partial<Task>} */ fields) {

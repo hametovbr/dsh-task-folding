@@ -3,9 +3,9 @@
 // one function is the point of docs/10 §16 step 7 — while the fold and the hint were registered as
 // two handlers on the same event, only convention stopped them from disagreeing about the decision.
 
-/** @typedef {import('../hints.js').Hint} Hint */
-/** @typedef {import('../settings.js').Settings} Settings */
-/** @typedef {import('../types.js').State} State */
+/** @typedef {import('../prompt/hints.js').Hint} Hint */
+/** @typedef {import('../domain/settings.js').Settings} Settings */
+/** @typedef {import('../domain/types.js').State} State */
 
 /**
  * @typedef {object} PreStepDeps

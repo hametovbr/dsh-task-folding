@@ -4,10 +4,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { isBeginMeta, isEndMeta } from '../host/projection.js'
-import { defaults, readSettings } from '../host/settings.js'
-import * as texts from '../host/texts.js'
-import { TITLE_MAX, decideVerdict, normalizeTitle } from '../host/tools.js'
+import { isBeginMeta, isEndMeta } from '../host/domain/projection.js'
+import { defaults, readSettings } from '../host/domain/settings.js'
+import * as texts from '../host/domain/texts.js'
+import { TITLE_MAX, decideVerdict, normalizeTitle } from '../host/domain/verdict.js'
 import { Sim } from './fixtures/sim.js'
 import { at, fakeMeter, harnessOf, withVolatiles } from './fixtures/tools.js'
 
@@ -383,17 +383,17 @@ async function runSynthetic(sim) {
 /**
  * A task with only the fields decideVerdict reads.
  *
- * @param {Partial<import('../host/types.js').Task>} patch
- * @returns {import('../host/types.js').Task}
+ * @param {Partial<import('../host/domain/types.js').Task>} patch
+ * @returns {import('../host/domain/types.js').Task}
  */
 function fakeTask(patch) {
-  return /** @type {import('../host/types.js').Task} */ (/** @type {unknown} */ (patch))
+  return /** @type {import('../host/domain/types.js').Task} */ (/** @type {unknown} */ (patch))
 }
 
 /**
- * @param {import('../host/types.js').State} state
+ * @param {import('../host/domain/types.js').State} state
  * @param {string} id
- * @returns {import('../host/types.js').Task}
+ * @returns {import('../host/domain/types.js').Task}
  */
 function taskOf(state, id) {
   const task = state.tasks[id]
@@ -405,7 +405,7 @@ function taskOf(state, id) {
  * The projection fields that must match between a real-tool run and a synthetic run;
  * estTokens and summaryChars come from the tools and differ by construction.
  *
- * @param {import('../host/types.js').State} state
+ * @param {import('../host/domain/types.js').State} state
  */
 function shape(state) {
   return state.order.map((id) => {

@@ -2,14 +2,14 @@
 // keeps a surface node list the way the host does, and feeds every event to the projection.
 // It also emulates the task tools' meta so scenarios read like model behavior.
 
-import { ABSORBED } from '../../host/cuts.js'
-import { apply, initialState, TASK_TOOLS } from '../../host/projection.js'
-import { resolveRegion } from '../../host/planner.js'
+import { ABSORBED } from '../../host/domain/cuts.js'
+import { apply, initialState, TASK_TOOLS } from '../../host/domain/projection.js'
+import { resolveRegion } from '../../host/domain/planner.js'
 
-/** @typedef {import('../../host/types.js').SessionEvent} SessionEvent */
-/** @typedef {import('../../host/types.js').State} State */
-/** @typedef {import('../../host/types.js').Task} Task */
-/** @typedef {import('../../host/types.js').EndVerdict} EndVerdict */
+/** @typedef {import('../../host/domain/types.js').SessionEvent} SessionEvent */
+/** @typedef {import('../../host/domain/types.js').State} State */
+/** @typedef {import('../../host/domain/types.js').Task} Task */
+/** @typedef {import('../../host/domain/types.js').EndVerdict} EndVerdict */
 
 /**
  * @typedef {{ kind: 'begin', title?: string }

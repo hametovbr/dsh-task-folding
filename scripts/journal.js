@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs'
 import zlib from 'node:zlib'
 
-/** @typedef {import('../host/types.js').SessionEvent} SessionEvent */
+/** @typedef {import('../host/domain/types.js').SessionEvent} SessionEvent */
 
 /**
  * @param {string} path a decoded .jsonl or a raw session.v4.jsonl.zstd

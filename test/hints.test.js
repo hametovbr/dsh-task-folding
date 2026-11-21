@@ -5,14 +5,14 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
-import { bucketFor, emptySpanKeyFor, hintKeyFor, isEmptySpan, maybeHint } from '../host/hints.js'
-import * as texts from '../host/texts.js'
+import { bucketFor, emptySpanKeyFor, hintKeyFor, isEmptySpan, maybeHint } from '../host/prompt/hints.js'
+import * as texts from '../host/domain/texts.js'
 import { Sim } from './fixtures/sim.js'
 import { harnessOf } from './fixtures/tools.js'
 
-/** @typedef {import('../host/hints.js').HintMessage} HintMessage */
-/** @typedef {import('../host/settings.js').Settings} Settings */
-/** @typedef {import('../host/types.js').State} State */
+/** @typedef {import('../host/prompt/hints.js').HintMessage} HintMessage */
+/** @typedef {import('../host/domain/settings.js').Settings} Settings */
+/** @typedef {import('../host/domain/types.js').State} State */
 
 /**
  * A session with one open task, created through the real task_begin tool.
@@ -399,11 +399,11 @@ test('the text is byte-stable while the age stays inside a bucket', async () => 
 // Purity
 
 test('hints imports only the pure cut/projection constants and the texts, and mutates nothing', async () => {
-  const source = readFileSync(new URL('../host/hints.js', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('../host/prompt/hints.js', import.meta.url), 'utf8')
   assert.deepEqual(source.match(/^import .*$/gm), [
-    "import { ABSORBED } from './cuts.js'",
-    "import { HINT_SOURCE_KIND } from './projection.js'",
-    "import * as texts from './texts.js'",
+    "import { ABSORBED } from '../domain/cuts.js'",
+    "import { HINT_SOURCE_KIND } from '../domain/projection.js'",
+    "import * as texts from '../domain/texts.js'",
   ])
   for (const forbidden of [
     'node:fs',
@@ -415,7 +415,7 @@ test('hints imports only the pure cut/projection constants and the texts, and mu
     'snapshotEvents',
     'writeFile',
   ])
-    assert.equal(source.includes(forbidden), false, `host/hints.js must not mention ${forbidden}`)
+    assert.equal(source.includes(forbidden), false, `host/prompt/hints.js must not mention ${forbidden}`)
 
   const { sim, h } = await openTask()
   say(sim, 25)

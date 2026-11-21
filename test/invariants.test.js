@@ -18,16 +18,16 @@ import { test } from 'node:test'
 
 import fc from 'fast-check'
 
-import { ABSORBED } from '../host/cuts.js'
-import { SpanEstimator } from '../host/estimate.js'
-import { dueTasks, resolveRegion } from '../host/planner.js'
-import { apply, init, initialState, parseState, TERMINAL, WAITING } from '../host/projection.js'
+import { ABSORBED } from '../host/domain/cuts.js'
+import { SpanEstimator } from '../host/domain/estimate.js'
+import { dueTasks, resolveRegion } from '../host/domain/planner.js'
+import { apply, init, initialState, parseState, TERMINAL, WAITING } from '../host/domain/projection.js'
 
-/** @typedef {import('../host/types.js').SessionEvent} SessionEvent */
-/** @typedef {import('../host/types.js').State} State */
-/** @typedef {import('../host/types.js').Task} Task */
-/** @typedef {import('../host/types.js').EndVerdict} EndVerdict */
-/** @typedef {import('../host/planner.js').FoldRegion} FoldRegion */
+/** @typedef {import('../host/domain/types.js').SessionEvent} SessionEvent */
+/** @typedef {import('../host/domain/types.js').State} State */
+/** @typedef {import('../host/domain/types.js').Task} Task */
+/** @typedef {import('../host/domain/types.js').EndVerdict} EndVerdict */
+/** @typedef {import('../host/domain/planner.js').FoldRegion} FoldRegion */
 
 /**
  * @typedef {{ kind: 'begin', title?: string }
@@ -119,7 +119,7 @@ function isReplaceEvent(event) {
   return typeof op === 'object' && op !== null && op.op === 'replace'
 }
 
-/** @param {SessionEvent} event @returns {import('../host/types.js').ReplaceOp} */
+/** @param {SessionEvent} event @returns {import('../host/domain/types.js').ReplaceOp} */
 function replaceOpOf(event) {
   const op = event.surfaceOp
   if (typeof op !== 'object' || op === null) throw new Error('not a replace event')
@@ -928,7 +928,7 @@ function treatmentOf(task, event, pendingSummary) {
  *
  * @param {number | null} cut
  * @param {Set<number>} shadowed
- * @param {import('../host/types.js').ReplaceOp} op
+ * @param {import('../host/domain/types.js').ReplaceOp} op
  * @param {number} replacementSeq
  * @returns {number | null}
  */
@@ -942,7 +942,7 @@ function afterCut(cut, shadowed, op, replacementSeq) {
  *
  * @param {number | null} cut
  * @param {Set<number>} shadowed
- * @param {import('../host/types.js').ReplaceOp} op
+ * @param {import('../host/domain/types.js').ReplaceOp} op
  * @param {number} replacementSeq
  * @returns {number | null}
  */
@@ -1384,7 +1384,7 @@ test('8. replay from a checkpoint at a random split equals the full replay', () 
       const split = Math.min(events.length, Math.max(0, Math.floor(share * (events.length + 1))))
       const full = replay(events)
       // The projection's init contract: it ignores both the header and the inherited event count
-      // because a checkpoint already contains the inherited prefix (host/projection.js init).
+      // because a checkpoint already contains the inherited prefix (host/domain/projection.js init).
       const prefix = replay(events.slice(0, split), init({ inherited: true }, split))
       const checkpoint = parseState(JSON.parse(JSON.stringify(prefix)))
       assert.deepEqual(checkpoint, prefix, `the checkpoint encoding changed the resumed prefix${where(ops)}`)

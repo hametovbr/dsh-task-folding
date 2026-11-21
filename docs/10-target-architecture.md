@@ -98,7 +98,8 @@ host/
     scheduler.js        pass(snapshot) → actions; owns ordering and retry policy
     generation.js       deferred generation jobs bound to an epoch
   tools/
-    meta.js             the durable payload writer/reader, versioned
+    index.js            createTools: composes the three tools and the shared direct-call guard
+    meta.js             the durable payload writer, versioned (the reducer owns the validating reader)
     task-begin.js       task_begin
     task-end.js         task_end (uses domain/verdict)
     recall.js           fold_recall (uses domain/ + journal view)
@@ -111,9 +112,15 @@ host/
     turn-stopping.js
 client/
   module.js             the loader entry
-  dock.js               conversation.input.dock
-  settings-card.js      plugins.bundle.config
-  locale.generated.js   generated from locale/en.json at build time
+  client.dock.js        conversation.input.dock       (package-local chunk)
+  client.settings-card.js  plugins.bundle.config      (package-local chunk)
+  client.locale.generated.js  generated from locale/en.json at build time (package-local chunk)
+
+The `client.` prefix is the host's package-local chunk contract, not a naming preference: the loader
+serves a sibling file only when its name matches `^client\.[A-Za-z0-9][A-Za-z0-9._-]*\.js$`
+(`@deepseek-ai/dsh-client-modules`, `CLIENT_CHUNK`), so `dock.js` and `settings-card.js` cannot be
+fetched with `require.async`. `module.js` is the entry because the host reads its path from
+`exports["./client"]`.
 scripts/
   contract-check.js  eval-report.js  verify-cache.js  mutate.js  check-pack.js  e2e-headless.js
 ```
@@ -302,9 +309,9 @@ the projection (`state.hintKey`) as today. Two rules, one module:
 
 ## 11. Client
 
-`client/module.js` loads, `client/dock.js` and `client/settings-card.js` register through slots.
-`locale/en.json` is the single source: a build step emits `locale.generated.js`, and a test asserts the
-generated dictionary equals the JSON. Today the same 22 keys are maintained twice and a test compares
+`client/module.js` loads, `client/client.dock.js` and `client/client.settings-card.js` register through
+slots. `locale/en.json` is the single source: a build step emits `client.locale.generated.js`, and a test
+asserts the generated dictionary equals the JSON. Today the same 22 keys are maintained twice and a test compares
 the two copies — a test that compensates for a missing generator.
 
 The dock reads the projection through `useProjection('taskFolding')` only; the settings card reads and
@@ -357,7 +364,10 @@ structure, and pretending otherwise would be the same mistake as patching the se
 
 ## 14. What is deleted or rewritten
 
-| Today | Fate | Why |
+The left column records the tree as it was before migration step 8; the right column is the fate each
+file actually had. Paths in the left column no longer exist.
+
+| Before step 8 | Fate | Why |
 |---|---|---|
 | `host/fold-runner.js` (743) | **deleted**, split into `runtime/session-runtime.js`, `runtime/scheduler.js`, `runtime/generation.js` | seven WeakMaps and a string region key; F9 lives here |
 | `host/engine-adapter.js` (187) | **deleted**, split into `ports/compaction.js` + `ports/compaction-shim.js` | the host boundary was mixed with fold logic |
@@ -369,7 +379,7 @@ structure, and pretending otherwise would be the same mistake as patching the se
 | `host/hints.js` | **kept**, gains the empty-span rule | pure |
 | `host/summarizer.js` | **kept** as `ports/llm.js` internals | request building is behaviour worth keeping |
 | `host/resolve.js` | **kept** as `ports/host-services.js` internals | the `createRequire` path is the shim's detail |
-| `client/client.js` (506) | **split** into `client/*.js` + generated locale | two slots and the dictionary in one file |
+| `client/client.js` (506) | **split** into `module.js` + `client.dock.js` + `client.settings-card.js` + generated locale | two slots and the dictionary in one file |
 | `scripts/*` | **kept** (eval-report, verify-cache, mutate, check-pack, contract-check), plus new `e2e-headless.js` | the tooling proved itself |
 
 Estimated shape: domain ≈ 2 300 lines (kept), ports ≈ 450, runtime ≈ 650, tools/prompt ≈ 800,
@@ -401,28 +411,28 @@ Each step is independently releasable and each keeps the live suite green:
 | 6 | `engine-adapter` split into `ports/compaction.js` + `ports/compaction-shim.js` + `compaction-native.js` stub; the adapter file is deleted | host boundary | low | **done** |
 | 7 | One `plugin/pre-step.js` orchestrator; the empty-span hint (Q15); generated client locale | Q15 hint, F7 groundwork | low | **done** |
 
-All seven steps are implemented. Step 3 was first because it closes the
-only known behavioural defect (F9), and it is what makes step 4's transitions testable: the runtime's
-`reduce` compares epochs, so "commit after the surface moved" is a legal transition rather than a race.
+| 8 | The §3 module tree: `domain/` (including `journal.js`, `surface.js`, `verdict.js`), `ports/host-services.js` and `ports/llm.js`, `runtime/scheduler.js` + `runtime/generation.js`, `tools/*`, `prompt/`, `plugin/mount.js` + `plugin/index.js`, and the client split; `fold-runner.js`, `tools.js`, `resolve.js`, `summarizer.js`, `hints.js`, `recall.js` deleted from their old paths | structural debt only | low | **done** |
+
+All eight steps are implemented. Step 3 was first because it closes the only known behavioural defect
+(F9), and it is what makes step 4's transitions testable: the runtime's `reduce` compares epochs, so
+"commit after the surface moved" is a legal transition rather than a race. Step 8 was a rename: every
+moved module kept its exported names, JSDoc and behaviour, and the 393-test suite, typecheck, lint,
+coverage, perf and pack checks all stayed green across the move.
 
 ## 17. Acceptance
 
-The target architecture is reached when every line below holds. State as of 2026-11-21:
+The target architecture is reached when every line below holds. State as of 2026-11-22:
 
 | Criterion | State |
 |---|---|
-| Every host import is inside `ports/` (a lint rule, not a habit) | **Partly**: the compaction and logger ports own their boundaries, but `resolve.js`, `summarizer.js` and `index.js` still reach the host directly; no lint rule yet |
-| No module outside `runtime/` keeps per-session state | **Met** for fold scheduling: one `WeakMap<session, SessionRuntime>` in `fold-runner.js`, which is the scheduler; the runtime itself is pure |
-| An epoch is part of every region resolution and every commit (F9 acceptance) | **Met** — `test/f9-surface-epoch.test.js` |
-| `foldRegion` no longer exists; `FoldRequest` carries `usage` and `source` | **Met** — `CompactionPort.fold(FoldRequest)`, `SummaryResult.source` recorded (not logged) |
-| Mutation score ≥ 85 % on `domain/`; the coverage gate covers `host/**/*.js` | **Partly**: the gate covers every `host/**/*.js` (99.7 / 95.0 / 96.0); the mutation run covers `cuts.js` (90 %), `planner.js` (100 %), `projection.js` (89.1 %) but there is no `domain/` directory to score |
+| Every host import is inside `ports/` (a lint rule, not a habit) | **Met** — `eslint.config.js` restricts `@deepseek-ai/*` imports to `host/ports/**` (type-only references are JSDoc and invisible to the rule); `ports/host-services.js` is the only module calling `ctx.tools`, `ctx.sessionProjections`, `ctx.systemPrompt`, `ctx.get`, `ctx.tokenMeter` and `ctx.logger` |
+| No module outside `runtime/` keeps per-session state | **Met** for fold scheduling: one `WeakMap<session, SessionRuntime>` in `runtime/scheduler.js`; the runtime and its reducer are pure |
+| An epoch is part of every region resolution and every commit (F9 acceptance) | **Met** — `domain/surface.js` + `test/f9-surface-epoch.test.js` |
+| `foldRegion` no longer exists; `FoldRequest` carries `usage` and `source` | **Met** — `CompactionPort.fold(FoldRequest)`; `SummaryResult.source` is recorded, and the delegate commit logs it once (`runtime/generation.js`) |
+| Mutation score ≥ 85 % on `domain/`; the coverage gate covers `host/**/*.js` | **Partly**: the gate covers every `host/**/*.js` (99.9 / 95.3 / 98.7 after the move); `scripts/mutate.js` now targets `domain/cuts.js`, `domain/projection.js` and `domain/planner.js` (last measured 90 / 89.1 / 100 %) but has not been re-run since the rename |
 | F9, F7 and F8 acceptance; docs/09 T5/T6 E2E green | **F9 done**; F7 and F8 open; T5/T6 not started |
 
-The **module tree of §3 is not the tree on disk**. The migration moved behaviour onto the right owners —
-epoch, ports, one runtime, one pre-step — but kept the files where they were, so these still do not
-exist: `domain/` (the pure modules sit at `host/*.js`), `runtime/scheduler.js` and
-`runtime/generation.js` (the scheduler is `fold-runner.js`, 779 lines), `tools/*` with `meta.js`
-(`tools.js` is one file), `prompt/` (`texts.js` + `hints.js`), `ports/host-services.js`, `ports/llm.js`
-(`summarizer.js`), and the client split (`client/client.js` carries module, dock and settings card
-together). Moving them is a rename with no behaviour change and no debt of its own; doing it in the same
-commit as F9 would have mixed a risky refactor with a safe one.
+The **module tree of §3 is the tree on disk** since step 8. What is still missing from the acceptance list
+is not structural: F7 and F8 (live settings persistence and the declared client-graph dependency) and the
+T5/T6 E2E checks. The `client.` prefix on the two component chunks is the host's chunk contract, recorded
+in §3, not a leftover of the old single file.

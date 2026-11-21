@@ -15,8 +15,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { SpanEstimator } from '../host/estimate.js'
-import { createFoldRunner } from '../host/fold-runner.js'
+import { SpanEstimator } from '../host/domain/estimate.js'
+import { createFoldRunner } from '../host/runtime/scheduler.js'
 import { Sim } from './fixtures/sim.js'
 import { at, fakeMeter, harnessOf, sessionOf } from './fixtures/tools.js'
 
@@ -579,7 +579,7 @@ test('a synchronous delegate throw becomes one failed generation, not an unhandl
 test('a rejected or null generation records one durable failure each until the task is failed', async () => {
   // docs/03 §5.4 failure accounting: each failed generation becomes one zero-cost failed
   // compaction through `rejectRegion`; the projection counts it, and the third one makes the task
-  // terminal `failed` (host/projection.js:193-203, MAX_DELEGATE_FAILURES = 3).
+  // terminal `failed` (host/domain/projection.js:193-203, MAX_DELEGATE_FAILURES = 3).
   for (const mode of ['reject', 'null']) {
     const sim = await delegateTask()
     const failing = failingDelegate(/** @type {'reject' | 'null'} */ (mode))

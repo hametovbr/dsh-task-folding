@@ -9,7 +9,7 @@ import fc from 'fast-check'
 import { checkInvariants, opArb, run } from './fixtures/ops.js'
 import { Sim } from './fixtures/sim.js'
 
-/** @typedef {import('../host/types.js').TaskStatus} TaskStatus */
+/** @typedef {import('../host/domain/types.js').TaskStatus} TaskStatus */
 
 test('random sessions keep regions balanced, non-overlapping, and verdicts final', () => {
   fc.assert(

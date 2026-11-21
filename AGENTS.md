@@ -13,13 +13,15 @@ Instructions for anyone — human or coding agent — implementing dsh-task-fold
 
 1. Never append session events. The only durable write channel is `output.presentationMeta` → `tool/result.data.meta`.
 2. Never parse model-facing text to derive state.
-3. `host/projection.js` and `host/cuts.js` are pure: no `ctx`, no I/O, no `Date.now()`, no randomness.
+3. `host/domain/` is pure: no `ctx`, no I/O, no `Date.now()`, no randomness. In particular
+   `host/domain/projection.js` and `host/domain/cuts.js` are enforced by an ESLint block.
 4. No code on the `agent/pre-step` or `agent/turn-stopping` path calls `session.snapshotEvents()` or iterates the event log.
 5. Never await an LLM call inside `agent/pre-step` or `agent/turn-stopping`; delegate summaries are generated in an un-awaited background promise (see `docs/adr/0006-background-delegate.md`).
 6. Only `host/ports/compaction-shim.js` may import, resolve or reference `@deepseek-ai/dsh-compaction-basic` internals; `host/ports/compaction.js` is the port every caller uses.
 7. Never wrap or monkey-patch host services (`ctx.llm`, `ctx.compaction`, …).
 8. Never write files to disk at runtime.
-9. All model-facing strings live in `host/texts.js`; the prompt budget test must pass.
+9. All model-facing strings live in `host/domain/texts.js`; `host/prompt/section.js` only
+   assembles the registration, and the prompt budget test must pass.
 
 ## Code style
 
@@ -31,7 +33,7 @@ Instructions for anyone — human or coding agent — implementing dsh-task-fold
 
 ```sh
 npm test            # node:test, all unit/property/replay/component/degradation/fault tests
-npm run coverage    # tests + the gate for every host/*.js (>=90% lines, >=85% branches, >=80% functions)
+npm run coverage    # tests + the gate for every host/**/*.js (>=90% lines, >=85% branches, >=80% functions)
 npm run typecheck   # tsc --noEmit --checkJs
 npm run lint        # eslint + prettier --check
 npm run pack:check  # manifest and tarball contract (offline)

@@ -6,8 +6,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { SpanEstimator } from '../host/estimate.js'
-import { createFoldRunner } from '../host/fold-runner.js'
+import { SpanEstimator } from '../host/domain/estimate.js'
+import { createFoldRunner } from '../host/runtime/scheduler.js'
 import { Sim } from './fixtures/sim.js'
 import { fakeMeter, harnessOf, sessionOf } from './fixtures/tools.js'
 

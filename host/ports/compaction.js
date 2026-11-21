@@ -14,7 +14,7 @@
 
 import { createShimCompactionPort } from './compaction-shim.js'
 
-/** @typedef {import('../types.js').TokenUsage} TokenUsage */
+/** @typedef {import('../domain/types.js').TokenUsage} TokenUsage */
 
 /**
  * The provider/model a fold is recorded under: the session's routed target at commit time.
@@ -34,7 +34,7 @@ import { createShimCompactionPort } from './compaction-shim.js'
  * @property {{startSeq:number, endSeq:number}} region   the host's replacement edges
  * @property {any[]} blocks
  * @property {FoldRoute} route
- * @property {import('../types.js').TokenUsage | undefined} usage
+ * @property {import('../domain/types.js').TokenUsage | undefined} usage
  * @property {AbortSignal | undefined} signal
  */
 

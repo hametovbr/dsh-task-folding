@@ -4,8 +4,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { PROMPT_SECTION } from '../host/texts.js'
-import { createTools } from '../host/tools.js'
+import { PROMPT_SECTION } from '../host/domain/texts.js'
+import { createTools } from '../host/tools/index.js'
 
 const TOTAL_BUDGET = 3400
 

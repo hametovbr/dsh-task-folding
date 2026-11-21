@@ -18,7 +18,7 @@ const CACHE = path.join(SCRATCH, 'npmcache')
 const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 
 /** Files every publish must contain, because the host reads each of them. */
-const REQUIRED_FILES = ['host/index.js', 'client/client.js', 'locale/en.json', 'cordis.patch.yml', 'icon.svg']
+const REQUIRED_FILES = ['host/index.js', 'client/module.js', 'locale/en.json', 'cordis.patch.yml', 'icon.svg']
 
 /** Manifest fields npm must not rewrite while packing. */
 const COMPARED_FIELDS = ['version', 'exports', 'dsh']

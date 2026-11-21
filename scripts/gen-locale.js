@@ -2,7 +2,7 @@
 // Generates client/client.locale.generated.js from locale/en.json (docs/10 §11): the JSON is the
 // single source of the UI copy, and the browser bundle receives it as a package-local chunk.
 //
-// client/client.js is a classic loader script (`window.__ModuleLoader__.load({ id, factory })`),
+// client/module.js is a classic loader script (`window.__ModuleLoader__.load({ id, factory })`),
 // not an ES module a bundler resolves, so it cannot `import` a sibling file. The host serves a
 // package's client half as exactly one combo script, and serves one of its package-local chunks
 // only when the file name matches the host's chunk contract (`client.<name>.js` in the bundle's own

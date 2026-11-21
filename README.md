@@ -86,7 +86,7 @@ This project keeps the concept and replaces the foundation:
 
 ```sh
 npm test            # unit, property, replay and component tests
-npm run coverage    # tests + the 100 % gate for host/projection.js and host/cuts.js
+npm run coverage    # tests + the gate for every host/**/*.js (>=90 % lines, >=85 % branches, >=80 % functions)
 npm run typecheck   # tsc --noEmit --checkJs
 npm run lint        # eslint + prettier --check
 npm run perf        # latency guards (kept out of `npm test`: they measure wall time)

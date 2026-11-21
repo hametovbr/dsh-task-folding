@@ -7,8 +7,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { initialState } from '../host/projection.js'
-import * as texts from '../host/texts.js'
+import { initialState } from '../host/domain/projection.js'
+import * as texts from '../host/domain/texts.js'
 import {
   GREP_CONTEXT_CHARS,
   GREP_MAX_HITS,
@@ -22,11 +22,11 @@ import {
   foldRange,
   listFolds,
   resolveFold,
-} from '../host/recall.js'
+} from '../host/tools/recall.js'
 import { Sim } from './fixtures/sim.js'
 import { fakeMeter, harnessOf } from './fixtures/tools.js'
 
-/** @typedef {import('../host/types.js').State} State */
+/** @typedef {import('../host/domain/types.js').State} State */
 /** @typedef {{ eventAt(seq: number): any, deriveEventMessage(event: any): any }} RecallSessionLike */
 
 /** A summary that clears the tool verdict, so `sim.fold` has a task to fold. */
@@ -381,7 +381,7 @@ test('a range projects a binary tool result to bounded JSON text', async () => {
 })
 
 // ---------------------------------------------------------------------------
-// Degraded messages: the brief fallbacks (host/recall.js roleOf/toolNameOf, host/texts.js renderBrief)
+// Degraded messages: the brief fallbacks (host/tools/recall.js roleOf/toolNameOf, host/domain/texts.js renderBrief)
 
 test('a tool result still names its tool when the assistant message is not rendered', async () => {
   const sim = new Sim()
@@ -483,7 +483,7 @@ function member(list, index) {
  * The seqs a fold shadowed, in surface order.
  *
  * @param {{ eventAt(seq: number): any }} session
- * @param {import('../host/types.js').FoldRow} row
+ * @param {import('../host/domain/types.js').FoldRow} row
  * @returns {number[]}
  */
 function shadowedSeqsOf(session, row) {

@@ -5,11 +5,11 @@ import assert from 'node:assert/strict'
 
 import fc from 'fast-check'
 
-import { dueTasks, resolveRegion } from '../../host/planner.js'
-import { TERMINAL, WAITING } from '../../host/projection.js'
+import { dueTasks, resolveRegion } from '../../host/domain/planner.js'
+import { TERMINAL, WAITING } from '../../host/domain/projection.js'
 /** @typedef {import('./sim.js').Sim} Sim */
 
-/** @typedef {import('../../host/types.js').TaskStatus} TaskStatus */
+/** @typedef {import('../../host/domain/types.js').TaskStatus} TaskStatus */
 
 const verdict = fc.constantFrom(
   /** @type {const} */ ('queued'),
@@ -104,7 +104,7 @@ export function checkInvariants(sim, terminal) {
   /** @type {[number, number, string][]} */
   const ranges = []
   for (const id of state.order) {
-    const task = /** @type {import('../../host/types.js').Task} */ (state.tasks[id])
+    const task = /** @type {import('../../host/domain/types.js').Task} */ (state.tasks[id])
     // 4: a terminal verdict never changes
     const seen = terminal.get(id)
     if (seen !== undefined) assert.equal(task.status, seen, `${id} left terminal status ${seen}`)

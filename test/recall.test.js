@@ -6,8 +6,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { apply, initialState } from '../host/projection.js'
-import * as texts from '../host/texts.js'
+import { apply, initialState } from '../host/domain/projection.js'
+import * as texts from '../host/domain/texts.js'
 import {
   GREP_CONTEXT_CHARS,
   GREP_MAX_HITS,
@@ -20,14 +20,14 @@ import {
   foldRange,
   listFolds,
   resolveFold,
-} from '../host/recall.js'
+} from '../host/tools/recall.js'
 import { journalEvents, readJournalText } from '../scripts/journal.js'
 import { M2_LOGS } from './fixtures/journals.js'
 import { Sim } from './fixtures/sim.js'
 import { fakeMeter, harnessOf } from './fixtures/tools.js'
 
-/** @typedef {import('../host/types.js').SessionEvent} SessionEvent */
-/** @typedef {import('../host/types.js').State} State */
+/** @typedef {import('../host/domain/types.js').SessionEvent} SessionEvent */
+/** @typedef {import('../host/domain/types.js').State} State */
 
 /** A summary that clears minSummaryChars without being large. */
 const SUMMARY = `## Done\n${'Wired the tool layer and checked it against the simulator. '.repeat(5)}`
@@ -384,10 +384,10 @@ test('replaying a live log, the index and ranges return deriveEventMessage in or
 // Purity
 
 test('recall imports nothing but texts and writes nothing', async () => {
-  const source = readFileSync(new URL('../host/recall.js', import.meta.url), 'utf8')
-  assert.deepEqual(source.match(/^import .*$/gm), ["import * as texts from './texts.js'"])
+  const source = readFileSync(new URL('../host/tools/recall.js', import.meta.url), 'utf8')
+  assert.deepEqual(source.match(/^import .*$/gm), ["import * as texts from '../domain/texts.js'"])
   for (const forbidden of ['node:fs', "from 'fs'", 'node:child_process', 'snapshotEvents', 'writeFile'])
-    assert.equal(source.includes(forbidden), false, `host/recall.js must not mention ${forbidden}`)
+    assert.equal(source.includes(forbidden), false, `host/tools/recall.js must not mention ${forbidden}`)
 
   const { sim, h } = await nestedFolds()
   const frozen = deepFreeze(JSON.parse(JSON.stringify(sim.state)))
@@ -406,7 +406,7 @@ test('recall imports nothing but texts and writes nothing', async () => {
  * The host's deriveEventMessage for a journal's events (docs/02 §2).
  *
  * @param {readonly SessionEvent[]} events
- * @returns {import('../host/recall.js').RecallSession}
+ * @returns {import('../host/tools/recall.js').RecallSession}
  */
 function journalSession(events) {
   const bySeq = new Map(events.map((event) => [event.seq, event]))

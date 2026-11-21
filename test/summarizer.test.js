@@ -5,21 +5,21 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { resolveRegion } from '../host/planner.js'
-import { foldIndex } from '../host/recall.js'
+import { resolveRegion } from '../host/domain/planner.js'
+import { foldIndex } from '../host/tools/recall.js'
 import {
   buildDelegateRequest,
   generateDelegateSummary,
   indexLinesFor,
   routeOfRequest,
   validateDelegateSummary,
-} from '../host/summarizer.js'
-import * as texts from '../host/texts.js'
+} from '../host/ports/llm.js'
+import * as texts from '../host/domain/texts.js'
 import { Sim } from './fixtures/sim.js'
 import { harnessOf, sessionOf } from './fixtures/tools.js'
 
-/** @typedef {import('../host/planner.js').FoldRegion} FoldRegion */
-/** @typedef {import('../host/types.js').Task} Task */
+/** @typedef {import('../host/domain/planner.js').FoldRegion} FoldRegion */
+/** @typedef {import('../host/domain/types.js').Task} Task */
 
 /** A summary that clears minSummaryChars without being large. */
 const SUMMARY = `## Done\n${'Wired the delegate path and checked its envelope. '.repeat(5)}`

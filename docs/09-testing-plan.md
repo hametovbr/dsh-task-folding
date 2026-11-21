@@ -67,7 +67,7 @@ the settings card, which is the only way to close F7 and to prove the client mod
 
 - **Mutation testing** on `projection.js`, `cuts.js` and `planner.js`: 100 % line coverage is not quality;
   a surviving mutant is a missing assertion. Target: ≥ 85 % killed.
-- **Coverage where the risk is**, not only where it is easy: extend the gate to every `host/*.js`
+- **Coverage where the risk is**, not only where it is easy: extend the gate to every `host/**/*.js`
   (≥ 90 % lines, ≥ 85 % branches), keeping 100 % on the two pure modules.
 
 ## 3. Plan
@@ -78,7 +78,7 @@ the settings card, which is the only way to close F7 and to prove the client mod
 | **T1** | Degradation suite: engine missing, `llm` missing, no tool sink, malformed `meta`, unknown `stateVersion`, foreign-realm log — **done 2026-11-21** | `test/degradation.test.js` (14 tests, 0 skipped) | each case has an asserted behaviour and a single log line; none throws | 1 d |
 | **T2** | Property suite (P1 list) over generated event streams (append, replace, prune, compaction, task tool calls) — **done 2026-11-21** | `test/invariants.test.js` (9 tests, 8 properties × 200 + a non-vacuity guard, 1740 generated streams, seed 20261121, ~4 s) | 8 properties × ≥ 200 cases each, deterministic with a fixed seed, one failing seed reproducible from the report | 2 d |
 | **T3** | Fault injection in the runner and adapter (P4 list) — **done 2026-11-21**; the suite found two real hot-path defects, both fixed: a throwing logger replaced the original error and rejected the hook, and an aborted generation counted toward the durable cap | `test/faults.test.js` (12 tests, 0 skipped) | every seam has a throw/abort/lock case; no unhandled rejection; durable records counted | 1.5 d |
-| **T4** | Coverage gate extended to `host/*.js` + mutation run on the three pure modules — **done 2026-11-21** (gate is now `host/*.js` at ≥ 90 % lines / ≥ 85 % branches / ≥ 80 % functions: the suite reaches 99.85 / 94.86 / 98.32; `scripts/mutate.js` + `npm run mutation`, no dependency) | CI change, `scripts/mutate.js` | gate green; mutation score ≥ 85 %; report committed under `docs/` | 1.5 d |
+| **T4** | Coverage gate extended to `host/**/*.js` + mutation run on the three pure modules — **done 2026-11-21** (gate is now `host/**/*.js` at ≥ 90 % lines / ≥ 85 % branches / ≥ 80 % functions: the suite reaches 99.85 / 94.86 / 98.32; `scripts/mutate.js` + `npm run mutation`, no dependency) | CI change, `scripts/mutate.js` | gate green; mutation score ≥ 85 %; report committed under `docs/` | 1.5 d |
 | **T5** | Headless E2E: `npm run e2e` runs a scripted session (task → fold → recall) against a scratch profile and asserts the journal with the existing scripts | `scripts/e2e-headless.js`, `.github/workflows/e2e.yml` (nightly) | green on the published release; a broken fold fails it | 1.5 d |
 | **T6** | Browser E2E: the dock renders, `showTaskBar` hides it, the settings card writes and the value survives a restart (F7) | `scripts/e2e-browser.js` (ego), nightly | three assertions pass; F7 closed or proven broken | 1.5 d |
 | **T7** | Load and longevity: 200 folds in one session, 5 000 tasks, pass latency p95, prompt budget under every settings combination | `test/load.manual.js` (like `perf.manual.js`) | p95 pass < 10 ms, memory growth < 50 MB, budget ≤ 3 400 chars in all 32 combinations | 1.5 d |

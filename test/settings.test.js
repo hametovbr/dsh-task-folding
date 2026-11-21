@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { FIELDS, buildConfig, clamp, defaults, readSettings } from '../host/settings.js'
+import { FIELDS, buildConfig, clamp, defaults, readSettings } from '../host/domain/settings.js'
 import { withVolatiles } from './fixtures/tools.js'
 
 test('defaults match the documented table', () => {

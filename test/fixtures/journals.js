@@ -6,7 +6,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-/** @typedef {import('../../host/types.js').SessionEvent} SessionEvent */
+/** @typedef {import('../../host/domain/types.js').SessionEvent} SessionEvent */
 
 export const M0_SESSIONS = fileURLToPath(new URL('../../m0/sessions/', import.meta.url))
 export const M2_LOGS = fileURLToPath(new URL('./logs/', import.meta.url))

@@ -10,10 +10,10 @@
 // exactly what makes this otherwise expensive call cheap. Nothing here reads the event log
 // wholesale, appends events, writes files or touches compaction internals.
 
-import { briefOfSeq, toolCallNames } from './recall.js'
-import * as texts from './texts.js'
+import { briefOfSeq, toolCallNames } from '../tools/recall.js'
+import * as texts from '../domain/texts.js'
 
-/** @typedef {import('./planner.js').FoldRegion} FoldRegion */
+/** @typedef {import('../domain/planner.js').FoldRegion} FoldRegion */
 
 /**
  * The latest `request/header` (docs/02 §2): the route the main request used and the tool schemas

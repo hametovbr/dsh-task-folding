@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { ABSORBED } from '../host/cuts.js'
-import { dueTasks, resolveRegion } from '../host/planner.js'
+import { ABSORBED } from '../host/domain/cuts.js'
+import { dueTasks, resolveRegion } from '../host/domain/planner.js'
 import {
   apply,
   init,
@@ -19,10 +19,10 @@ import {
   viewSchema,
   toolCalls,
   view,
-} from '../host/projection.js'
+} from '../host/domain/projection.js'
 import { Sim } from './fixtures/sim.js'
 
-/** @typedef {import('../host/types.js').Task} Task */
+/** @typedef {import('../host/domain/types.js').Task} Task */
 
 /** @param {Sim} sim @param {string} id @returns {Task} */
 function task(sim, id) {

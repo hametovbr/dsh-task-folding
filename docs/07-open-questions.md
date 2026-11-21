@@ -81,7 +81,7 @@ measurement — but the mechanism is the host's, and the direction is not in dou
 the always-on surface stays at ≈ 745 tokens (04 §4), which is still a third of taskfold's.
 **Revisit when** the host can activate a deferred baseline tool (a tool-search call, or a
 `tool-addition` producer for tools in the first header); then this is a one-line change in
-`host/tools.js` plus re-pinning `test/prompt-budget.test.js`.
+`host/tools/` plus re-pinning `test/prompt-budget.test.js`.
 
 <a id="q7"></a>
 ## Q7 — One Loader row for Host + Client, and the dock slot

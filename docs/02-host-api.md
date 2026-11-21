@@ -94,7 +94,7 @@ interface ToolDefinition extends ToolSchema {        // name, description, param
 - `tools/pre-execute` (waterfall) and `ctx.tools.guard()` exist; the plugin does not need them in the base design.
 - **Schema subset.** `parameters` and `output.schema` must use only `type` (exactly one string: type arrays are refused), `oneOf`, `properties`, `required`, `additionalProperties`, `items`, `enum`, `const`, plus the annotations `description`, `title`, `default`, `examples` — enforced by `assertSupportedJsonSchema` (`packages/core/tools/src/json-schema.ts`, L76–L90, L302–L374). A nullable field is written as `oneOf: [{ "type": "string" }, { "type": "null" }]`.
 - **Arguments are not validated.** The registry validates the *returned value* against `output.schema` and nothing checks `exec.arguments` against `parameters` (`packages/core/tools/src/pipeline.ts` `dispatchToolBody`; neither the registry nor `dsh-tool-executor-native` reads `parameters` on execution). A tool must validate its own arguments.
-- **Errors.** A tool that throws yields `isError: true` with `content: [{ type: 'text', text: 'Error: <message>' }]` and **no** `meta` (`toolErrorResult`, `pipeline.ts` L719). Error text is therefore model-facing and belongs in `host/texts.js`.
+- **Errors.** A tool that throws yields `isError: true` with `content: [{ type: 'text', text: 'Error: <message>' }]` and **no** `meta` (`toolErrorResult`, `pipeline.ts` L719). Error text is therefore model-facing and belongs in `host/domain/texts.js`.
 
 ## 5. Agent hooks (public)
 
@@ -189,7 +189,7 @@ first.
 
 - A `Config` schema built with `@deepseek-ai/schemastery`; fields marked `.volatile()` render as live rows on the Plugins page and are re-resolved without reload. The plugin reads them through the reactive `config` passed to `apply`.
 - **[live] Module resolution is layout-dependent.** With the bundle physically inside `profiles/<name>/node_modules/` (registry installs), bare `import('@deepseek-ai/schemastery')`, `…/dsh-compaction`, `…/dsh-compaction-basic` and `…/dsh-llm` all succeed, because the profiles directory holds `node_modules/@deepseek-ai/*` links to the runtime. With a development install (`dsh plugin add <local path>` creates a pnpm `link:`), Node resolves the real path and the same imports fail. Use bare imports first, then fall back to `createRequire` anchored at the DSH runtime (`process.argv[1]`'s `node_modules`). See [07 Q4](07-open-questions.md#q4).
-- **[live] Declaring the packages as `peerDependencies` does not link them.** After `dsh plugin add <local path>` the profile's `node_modules` held only the plugin's own symlink — no `@deepseek-ai/*` entries at all — and the runtime fallback in `host/resolve.js` is what makes `@deepseek-ai/schemastery` available. A row's `config` is still applied: setting `minSpanTokens` in the profile's `cordis.patch.yml` changed the verdicts of the next session (M2, [report](../m2/REPORT.md)).
+- **[live] Declaring the packages as `peerDependencies` does not link them.** After `dsh plugin add <local path>` the profile's `node_modules` held only the plugin's own symlink — no `@deepseek-ai/*` entries at all — and the runtime fallback in `host/ports/host-services.js` is what makes `@deepseek-ai/schemastery` available. A row's `config` is still applied: setting `minSpanTokens` in the profile's `cordis.patch.yml` changed the verdicts of the next session (M2, [report](../m2/REPORT.md)).
 
 ## 10. Client (public)
 

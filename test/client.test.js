@@ -1,17 +1,24 @@
 // The browser half (docs/03 §9): the module loads in the Client's loader form, registers its two
 // slots, and registers the packaged dictionary that `npm run locale:gen` writes. No browser is
-// needed for this: both client scripts are classic scripts over a fake `window.__ModuleLoader__`.
+// needed for this: the client scripts are classic scripts over a fake `window.__ModuleLoader__`.
+//
+// The loader entry and its two component chunks are read as one `SOURCE`: the entry carries the
+// registration and the dictionary request, the chunks carry the dock and the settings card, and the
+// assertions below are the same ones a single file had to satisfy.
 
 import assert from 'node:assert/strict'
 import { readFileSync, statSync } from 'node:fs'
 import { test } from 'node:test'
 
-const SOURCE = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')
+const MODULE = readFileSync(new URL('../client/module.js', import.meta.url), 'utf8')
+const DOCK = readFileSync(new URL('../client/client.dock.js', import.meta.url), 'utf8')
+const SETTINGS = readFileSync(new URL('../client/client.settings-card.js', import.meta.url), 'utf8')
+const SOURCE = [MODULE, DOCK, SETTINGS].join('\n')
 const GENERATED = readFileSync(new URL('../client/client.locale.generated.js', import.meta.url), 'utf8')
 const LOCALE = JSON.parse(readFileSync(new URL('../locale/en.json', import.meta.url), 'utf8'))
 const MANIFEST = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
-/** The chunk name `client/client.js` requests and the host's chunk route accepts. */
+/** The chunk name `client/module.js` requests and the host's chunk route accepts. */
 const CHUNK = 'client.locale.generated.js'
 
 /** A React stand-in: enough for the module to define components without rendering them. */
@@ -67,16 +74,16 @@ function generatedChunk() {
  * @returns {Promise<{ id: string, plugin: any, registered: any[], locales: [string, any][] }>}
  */
 async function loadClient() {
-  const chunks = registrationsOf(GENERATED)
+  // Every package-local chunk the entry may fetch: the generated dictionary and the two components.
+  const chunks = [...registrationsOf(GENERATED), ...registrationsOf(DOCK), ...registrationsOf(SETTINGS)]
   /** @type {any} */
   const require = (/** @type {string} */ name) => {
     if (name === 'react') return React
     throw new Error(`the client module must not require ${name}`)
   }
   require.async = async (/** @type {string} */ spec) => {
-    if (spec !== `./${CHUNK}`) throw new Error(`the client module must not load ${spec}`)
-    const chunk = chunks.find((entry) => entry.chunk === CHUNK)
-    if (chunk === undefined) throw new Error('the generated locale chunk is not registered')
+    const chunk = chunks.find((entry) => `./${entry.chunk}` === spec)
+    if (chunk === undefined) throw new Error(`the client module must not load ${spec}`)
     return chunk.factory(require)
   }
   const captured = registrationsOf(SOURCE).find(

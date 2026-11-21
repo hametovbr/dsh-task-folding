@@ -6,13 +6,13 @@ import { test } from 'node:test'
 
 import fc from 'fast-check'
 
-import { apply, initialState, parseState } from '../host/projection.js'
+import { apply, initialState, parseState } from '../host/domain/projection.js'
 import { journalNames, loadJournal } from './fixtures/journals.js'
 import { Sim } from './fixtures/sim.js'
 import { opArb, run } from './fixtures/ops.js'
 
-/** @typedef {import('../host/types.js').SessionEvent} SessionEvent */
-/** @typedef {import('../host/types.js').State} State */
+/** @typedef {import('../host/domain/types.js').SessionEvent} SessionEvent */
+/** @typedef {import('../host/domain/types.js').State} State */
 
 /**
  * @param {readonly SessionEvent[]} events

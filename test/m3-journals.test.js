@@ -5,12 +5,12 @@ import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { apply, initialState, isEndMeta, parseState } from '../host/projection.js'
+import { apply, initialState, isEndMeta, parseState } from '../host/domain/projection.js'
 import { journalEvents, readJournalText } from '../scripts/journal.js'
 import { M2_LOGS } from './fixtures/journals.js'
 
-/** @typedef {import('../host/types.js').SessionEvent} SessionEvent */
-/** @typedef {import('../host/types.js').State} State */
+/** @typedef {import('../host/domain/types.js').SessionEvent} SessionEvent */
+/** @typedef {import('../host/domain/types.js').State} State */
 
 const readLog = (/** @type {string} */ name) => journalEvents(readJournalText(join(M2_LOGS, name)))
 

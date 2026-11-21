@@ -18,11 +18,11 @@
 
 import { pathToFileURL } from 'node:url'
 
-import { apply, initialState } from '../host/projection.js'
+import { apply, initialState } from '../host/domain/projection.js'
 import { journalEvents, readJournalText } from './journal.js'
 
-/** @typedef {import('../host/types.js').SessionEvent} SessionEvent */
-/** @typedef {import('../host/types.js').State} State */
+/** @typedef {import('../host/domain/types.js').SessionEvent} SessionEvent */
+/** @typedef {import('../host/domain/types.js').State} State */
 
 /** The summary node size estimate divides the summary's character count by this. */
 export const SUMMARY_CHARS_PER_TOKEN = 4
@@ -55,8 +55,9 @@ const SOURCE = {
     'assistant/message.data.usage: cacheReadTokens + inputTokens per main request (request/header in this ' +
     'host carries config, adapterDefaults and tools only, no token count)',
   foldsCount:
-    'host/projection.js apply() replay from initialState(): state.folds.length (one row per compaction/summary)',
-  verdicts: 'host/projection.js apply() replay from initialState(): state.tasks[*].status over state.order',
+    'host/domain/projection.js apply() replay from initialState(): state.folds.length (one row per compaction/summary)',
+  verdicts:
+    'host/domain/projection.js apply() replay from initialState(): state.tasks[*].status over state.order',
   foldKind:
     'compaction/summary.data.usage presence: usage → delegate, no usage → self (the scripts/verify-cache.js rule)',
   shadowed:
@@ -545,7 +546,7 @@ function promptAggregate(sessions) {
  * @param {State} state
  */
 function foldsMetric(events, state) {
-  /** @type {Map<number, import('../host/types.js').FoldRow>} */
+  /** @type {Map<number, import('../host/domain/types.js').FoldRow>} */
   const projected = new Map()
   for (const row of state.folds) projected.set(row.summarySeq, row)
 
@@ -573,7 +574,7 @@ function foldsMetric(events, state) {
 
 /**
  * @param {SessionEvent} event a compaction/summary event
- * @param {import('../host/types.js').FoldRow | null} projected
+ * @param {import('../host/domain/types.js').FoldRow | null} projected
  */
 function foldRow(event, projected) {
   const data = isRecord(event.data) ? event.data : {}
@@ -933,7 +934,7 @@ function methodLines() {
     '',
     '- **Billed tokens** are sums over `assistant/message.data.usage` (main requests) and `compaction/summary.data.usage` (fold requests). The host counts are disjoint, so the cache-hit share is `cacheReadTokens / (cacheReadTokens + inputTokens)`.',
     '- **Context size** is `cacheReadTokens + inputTokens` per main request. `request/header` in this host carries `config`, `adapterDefaults` and `tools` only, no token count; if a log did carry one it would win over the usage-derived size.',
-    '- **Folds, verdicts and task ids** come from replaying the log through `host/projection.js` (`apply` from `initialState`); a task verdict is its final `status`.',
+    '- **Folds, verdicts and task ids** come from replaying the log through `host/domain/projection.js` (`apply` from `initialState`); a task verdict is its final `status`.',
     '- A fold is **`self`** when its `compaction/summary` has no `data.usage` and **`delegate`** when it has one, the rule of `scripts/verify-cache.js`.',
     '- **Span size** is `compaction/summary.data.shadowedTokenCount`, the host token meter. The **summary node size is an estimate**: the character count of the summary text divided by 4, because the token meter is unavailable offline.',
     '- **Recall calls** are `tool/call` events named `fold_recall` (`grep` → grep, `from`/`to` → range), `fold_range` or `fold_grep`.',

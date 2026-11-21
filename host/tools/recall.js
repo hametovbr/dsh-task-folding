@@ -2,10 +2,10 @@
 // full event-log snapshot. Every read resolves a fold row to its summary event's `shadowedSeqs`
 // and then to `session.deriveEventMessage`, which costs O(span) and never grows with the log.
 
-import * as texts from './texts.js'
+import * as texts from '../domain/texts.js'
 
-/** @typedef {import('./types.js').State} State */
-/** @typedef {import('./types.js').FoldRow} FoldRow */
+/** @typedef {import('../domain/types.js').State} State */
+/** @typedef {import('../domain/types.js').FoldRow} FoldRow */
 
 /**
  * The part of the host session recall reads (docs/02 §2). `eventAt` returns undefined for a seq
@@ -541,4 +541,90 @@ function contextAround(text, at, length) {
 /** @param {string} text */
 function collapse(text) {
   return text.replace(/\s+/g, ' ').trim()
+}
+
+// ---------------------------------------------------------------------------
+// The fold_recall tool
+
+/**
+ * `fold_recall` (docs/04 §1, docs/10 §3): the one tool over the readers above. It is defined in
+ * this module because every read it dispatches to lives here; the shared direct-call guard comes in
+ * through the deps so this file keeps importing nothing but the texts.
+ *
+ * @param {import('./index.js').ToolInternals} deps
+ * @returns {any} the fold_recall tool definition
+ */
+export function createRecallTool(deps) {
+  return {
+    name: 'fold_recall',
+    description: texts.FOLD_RECALL_DESCRIPTION,
+    // A lookup aid, not the discipline: the prompt section already names the tool, so the host
+    parameters: {
+      type: 'object',
+      properties: {
+        task: { type: 'string', description: texts.FOLD_RECALL_PARAMS.task },
+        fold: { type: 'integer', description: texts.FOLD_RECALL_PARAMS.fold },
+        from: { type: 'integer', description: texts.FOLD_RECALL_PARAMS.from },
+        to: { type: 'integer', description: texts.FOLD_RECALL_PARAMS.to },
+        grep: { type: 'string', description: texts.FOLD_RECALL_PARAMS.grep },
+        page: { type: 'integer', description: texts.FOLD_RECALL_PARAMS.page },
+      },
+    },
+    output: {
+      schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+      /** @param {any} _args @param {any} value */
+      render(_args, value) {
+        return [{ type: 'text', text: value.text }]
+      },
+    },
+    /**
+     * The dispatch the schema implies (docs/04 §1): no arguments lists the folds; `fold` or `task`
+     * picks one; `from`/`to` reads an exact range of it; `grep` searches it. Reads are from the
+     * log only, so an unknown fold, an unknown task or a bad pattern is a clean text, not a throw.
+     *
+     * @param {any} args
+     * @param {any} exec
+     */
+    async execute(args, exec) {
+      deps.assertDirect(exec, 'fold_recall')
+      const session = exec.agent.session
+      const state = await deps.stateOf(session)
+      const given = /** @type {Record<string, any>} */ (args && typeof args === 'object' ? args : {})
+      /** @param {string} key */
+      const option = (key) => (given[key] === undefined || given[key] === null ? undefined : given[key])
+      const fold = option('fold')
+      const task = option('task')
+      const from = option('from')
+      const to = option('to')
+      const grep = option('grep')
+      const page = option('page')
+
+      /** @type {number | null} */
+      let ordinal = null
+      if (fold !== undefined) {
+        if (!Number.isInteger(fold)) return { text: texts.BAD_FOLD_ARG(fold) }
+        ordinal = fold
+      } else if (task !== undefined) {
+        if (typeof task !== 'string') return { text: texts.BAD_TASK_ARG(task) }
+        ordinal = foldOrdinalForTask(state, task)
+        if (ordinal === null) return { text: texts.NOT_FOUND_TASK(task) }
+      }
+
+      if (ordinal === null) {
+        const narrows = from !== undefined || to !== undefined || grep !== undefined || page !== undefined
+        return { text: narrows ? texts.NEED_FOLD : listFolds(state, session) }
+      }
+      if (grep !== undefined && (from !== undefined || to !== undefined)) return { text: texts.RANGE_OR_GREP }
+      if (from !== undefined || to !== undefined) {
+        if (!Number.isInteger(from) || !Number.isInteger(to)) return { text: texts.RANGE_NEEDS_BOTH }
+        return { text: foldRange(state, session, ordinal, from, to) }
+      }
+      if (grep !== undefined) {
+        if (typeof grep !== 'string') return { text: texts.BAD_GREP_ARG(grep) }
+        return { text: foldGrep(state, session, ordinal, grep) }
+      }
+      if (page !== undefined && !Number.isInteger(page)) return { text: texts.PAGE_INVALID(page) }
+      return { text: foldIndex(state, session, ordinal, page === undefined ? 1 : page) }
+    },
+  }
 }

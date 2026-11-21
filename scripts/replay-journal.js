@@ -7,7 +7,7 @@
 
 import { readJournalText, journalEvents } from './journal.js'
 
-import { apply, initialState, view } from '../host/projection.js'
+import { apply, initialState, view } from '../host/domain/projection.js'
 
 const args = process.argv.slice(2)
 const file = args.find((a) => !a.startsWith('--'))

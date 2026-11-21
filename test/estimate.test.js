@@ -1,11 +1,11 @@
-// host/estimate.js: the per-session token cache, the span fallback chain and the invalid-value
+// host/domain/estimate.js: the per-session token cache, the span fallback chain and the invalid-value
 // guards. A fold boundary measures its span cold in a fresh process (docs/06 §4), so these tests
 // drive the estimator directly with a counting token meter instead of through the runner.
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { CACHE_LIMIT, SpanEstimator } from '../host/estimate.js'
+import { CACHE_LIMIT, SpanEstimator } from '../host/domain/estimate.js'
 import { at } from './fixtures/tools.js'
 
 /**
@@ -83,7 +83,7 @@ test('a missing spanStart falls back to beginCut + 1', () => {
 test('a negative spanStart falls back to beginCut + 1', () => {
   const meter = countingMeter(10)
   const session = sessionOf()
-  // -1 is the ABSORBED sentinel (host/cuts.js); it is never a surface position.
+  // -1 is the ABSORBED sentinel (host/domain/cuts.js); it is never a surface position.
   assert.equal(new SpanEstimator(meter).span(session, taskOf({ beginCut: 1, spanStart: -1 })), 40)
   assert.equal(meter.calls, 4)
 })

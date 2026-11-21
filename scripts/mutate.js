@@ -7,7 +7,7 @@
 //
 // Usage:
 //   node scripts/mutate.js                            # every target, default test sets
-//   node scripts/mutate.js --target host/cuts.js --tests test/cuts.test.js,test/properties.test.js
+//   node scripts/mutate.js --target host/domain/cuts.js --tests test/cuts.test.js,test/properties.test.js
 //   node scripts/mutate.js --json --min-score 0.85
 //
 // The copy lives under `.tmp/mutation/`, which is gitignored; the working tree is never modified.
@@ -27,15 +27,15 @@ const WORK = join(ROOT, '.tmp', `mutation-${process.pid}`)
 /** @type {Target[]} */
 const DEFAULT_TARGETS = [
   {
-    target: 'host/cuts.js',
+    target: 'host/domain/cuts.js',
     tests: ['test/cuts.test.js', 'test/properties.test.js', 'test/projection.test.js'],
   },
   {
-    target: 'host/projection.js',
+    target: 'host/domain/projection.js',
     tests: ['test/projection.test.js', 'test/properties.test.js', 'test/replay.test.js'],
   },
   {
-    target: 'host/planner.js',
+    target: 'host/domain/planner.js',
     tests: ['test/planner.test.js', 'test/fold-runner.test.js', 'test/properties.test.js'],
   },
 ]

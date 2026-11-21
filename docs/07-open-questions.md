@@ -14,9 +14,10 @@ Each question names the assumption, why it matters, and how it was (or will be) 
 | [Q8](#q8) | Replacement events | Answered — confirmed, with precisions |
 | [Q9](#q9) | Concurrency in a batch | Answered — refuted (sequential) |
 | [Q10](#q10) | Implicit per-turn task | Open (after M7) |
-| [Q11](#q11) | Recording a failed delegate generation | Answered from source; confirm live in M5 |
-| [Q12](#q12) | Source of `system`/`tools` for delegate requests | Partly answered (M5) |
+| [Q11](#q11) | Recording a failed delegate generation | Answered — confirmed live in M5 |
+| [Q12](#q12) | Source of `system`/`tools` for delegate requests | Answered — request mirrors the host's; measured by `scripts/verify-cache.js` |
 | [Q13](#q13) | Collapsing an `outer` task after its children folded | Open (M7) |
+| [Q15](#q15) | The model packs `task_begin` together with the first work calls | Open (M6 hint or M7 prompt) |
 
 <a id="q1"></a>
 ## Q1 — PTC (`run_code`) calls
@@ -90,13 +91,14 @@ Each question names the assumption, why it matters, and how it was (or will be) 
 **Assumption:** calling `compactRegion` on a valid region with an adapter `summarize()` that rejects immediately makes the host append `compaction/start` + `compaction/end{ error }` and release the lock, at no LLM cost. The reducer counts that toward the delegate failure cap (03 §5.4).
 **Why it matters:** without a durable record, a task whose summary keeps failing would be retried (and billed) after every restart.
 **Answer from source (`packages/compaction/compaction-basic/src/region.ts` L211–L250, rc.5):** `compaction/start` is appended before `summarize()` runs; any error thrown from the summarize stage (unless `recover()` handles it — that path is for context-overflow recovery) makes the transaction append `compaction/end { error: errorChain(error) }` before rethrowing. So a rejecting adapter `summarize()` produces exactly the durable failure record the design needs.
-**Settle:** confirm live in M5. Fallback: an in-memory cap only (bounded re-billing: at most `maxDelegateFailures` per process lifetime), documented in ADR 0005.
+**Settled (M5):** confirmed live. The adapter's `rejectRegion` (`engine-adapter.js`) runs `compactRegion` on the task's region with a `summarize()` that rejects immediately; the host appended `compaction/start` + `compaction/end{ error }` and released the lock, at no LLM cost, and the reducer's `compaction/end{ error }` row counted it. The cap turns the third failure into `failed`, so a task whose summary keeps failing is not retried after a restart. Design: 03 §5.4 "Failure accounting"; live evidence: [`m5/REPORT.md`](../m5/REPORT.md). The ADR 0005 fallback (an in-memory cap only) is not needed.
 
 <a id="q12"></a>
 ## Q12 — Source of `system` and `tools` for delegate requests
 
-**Answer (partial, M0 journals):** the system prompt is in history (`request/context.systemPromptUpdate: "in-history"`, a `system/message` surface node), and `request/header.data.header` carries `tools` and `config` (`provider`, `model`, `maxTokens`, `reasoningEffort`). A request built from the surface prefix plus the latest header's `tools` should match the main request's prefix.
-**Still open:** confirm the provider cache hit ratio for such a request (M5, `scripts/verify-cache.js`), and whether `GenerateOptions` needs any header field beyond `tools` and `config` to keep the prefix identical.
+**Answer (M5):** the delegate request is built exactly like the host's own summarization request: the surface prefix (the in-history `system` head + the span) followed by the instruction as the final user message, with `tools` (and `config`) from the latest `request/header`; `GenerateOptions` needs no header field beyond those to keep the prefix identical (02 §7). That is the envelope `summarizeWithLlm` builds for host compaction, so the provider's prefix cache applies to a delegate summary too.
+**Measurement:** `scripts/verify-cache.js` reads the journals and reports, per journal, one row per `compaction/summary` (LLM-backed via `data.llmStreamCall` vs self fold, provider/model, shadowed tokens, cache read vs fresh input, cache-hit ratio), the session's main-request count with its min/median cache-hit ratio, and a verdict line comparing them. It fails (exit 1) when an LLM-backed summary is below `--min-ratio` (default 0.8) or more than 10 percentage points below the median main-request ratio.
+**From the fixtures:** the only LLM-backed checkpoint in `test/fixtures/logs/` is the host engine's own (`m3-realm-compaction.jsonl`, seq 61) — 25,088 cache-read vs 466 fresh input, 98.2 %, against a main-request median of 98.9 % over 6 measured requests. The taskfold folds in the fixtures are self folds and carry no usage by design, so no delegate ratio is readable from them; the delegate number is what the script produces on an M5 journal.
 
 <a id="q13"></a>
 ## Q13 — Collapsing a span made only of fold nodes
@@ -109,3 +111,16 @@ folded.
 **Open:** whether to collapse such a span anyway (it saves little context but flattens the tree), or to
 lower the floor for a span that consists only of fold nodes.
 **Settle:** M7, with the evaluation data ([08](08-followups.md) Q13).
+
+<a id="q15"></a>
+## Q15 — The model packs `task_begin` together with its first work calls
+
+**Observed (M5, twice):** the model answered "open a task and read two files" with ONE assistant
+message carrying `task_begin`, `read`, `read`. The begin batch therefore ended after the last read
+result, `beginCut` pointed there, and the task's span was the single closing message — 245 tokens, so
+it closed `below-floor` and nothing folded. The cuts are behaving exactly as designed (a task's span is
+what follows its begin batch); the discipline is not.
+**Why it matters:** those tasks never fold, so the plugin's cost is paid (prompt) without the benefit.
+**Options:** a prompt line asking for `task_begin` on its own; a hint when a task closes with an empty
+span; or (design change) treating a batch that contains `task_begin` as part of the span.
+**Settle:** M6 (hint) and M7 (prompt wording), with the evaluation data.

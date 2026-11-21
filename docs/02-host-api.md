@@ -178,6 +178,7 @@ first.
 ## 7. LLM and token meter (public)
 
 - `ctx.llm.stream(options: GenerateOptions)` — async iterable of `StreamChunk`; `BlockAssembler` from `@deepseek-ai/dsh-llm` assembles blocks, usage and finish. Used by the delegate path only.
+- **[live] The delegate request envelope** (`packages/compaction/compaction-basic/src/summarizer.ts`, `summarizeWithLlm`): `GenerateOptions` is `{ provider, model, messages, toolHistory, tools?, maxTokens, sessionId, purpose: 'compaction', signal? }` — the conversation prefix (`system` head + span) with the instruction as the final user message. `compaction/summary.data.usage` is that call's `TokenUsage` (`packages/llm/llm/src/types.ts` L182); its counts are disjoint (`inputTokens` is uncached input only), so the cache-hit ratio is `cacheReadTokens / (cacheReadTokens + inputTokens)`.
 - `ctx.tokenMeter.estimateMessage(message): number` (`packages/llm/token-meter/src/index.ts` L219) — the host's own estimator. Use it for the fold floor instead of a private heuristic.
 
 ## 8. System prompt (public)

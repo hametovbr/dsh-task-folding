@@ -136,7 +136,9 @@ Tasks:
 
 Acceptance: recall works for task folds, auto compactions and pruned results; no file is written anywhere.
 
-### M5 — Delegate fallback
+### M5 — Delegate fallback — **done 2026-11-21**
+
+Result: `host/summarizer.js` (prefix-anchored request built exactly like the host's own — the surface prefix plus the span, `tools` from the latest `request/header`; instruction in `texts.js`; generation through the host's `BlockAssembler`; output validation) and the two-phase fold runner (one un-awaited generation per session, commit at a later boundary when the region key still matches, durable failure accounting through `Engine.rejectRegion`), plus `scripts/verify-cache.js`. 44 new tests (195 total). Live: a delegate fold committed with a **99.1 % provider cache-hit against a 99.3 % median of the session's own main requests (−0.2 pp, floor 80 %)** — the cache requirement (03 §12 invariant 9) is met and measured — and three failed generations recorded durable `compaction/end{error}` rows, turning the task `failed` without a billed retry loop (Q11 confirmed). Two silent defects were found and fixed: the region key included the surface length (every generated summary was discarded), and a delegate fold is unmarked by design, so the audit had to classify it by `usage`. Details: [`m5/REPORT.md`](../m5/REPORT.md).
 
 Tasks:
 

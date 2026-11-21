@@ -54,6 +54,10 @@ Checks after every event:
 - `test/perf.manual.js` (`npm run perf`, its own CI step, because `npm test` runs a dozen files in parallel and wall-clock budgets would measure the scheduler): build a synthetic log of 80k events with 200 tasks; assert that a pre-step call with nothing due takes < 2 ms and that a cold folding boundary (one due self fold, fake engine) takes < 10 ms. The "does not grow with the log" invariant is pinned by the same absolute budget at 5k and at 80k events on the idle boundary rather than by a ratio of two sub-millisecond medians (that ratio is mostly scheduler noise). A boundary that folds pays three `surface.nodes.indexOf` calls, i.e. O(surface), which the design accepts (`docs/03` §5.2); what must not grow with the log is everything else, and `test/fold-runner.test.js` proves structurally that no code path snapshots or iterates the log.
 - A guard test that wraps `session.snapshotEvents` in the fake session to throw, and runs the pre-step and turn-stopping handlers.
 
+### Cache-hit guard
+
+`scripts/verify-cache.js <journal...> [--min-ratio 0.8] [--json]` reads a session journal and prints, per summarization, whether it came from the LLM seam (delegate) or is an unmarked self fold, and its cache-read share; it compares those with the session's own `assistant/message` usages and exits non-zero when an LLM-backed summary is below the floor or more than 10 points below the main median. Self folds have no LLM call and are never counted. Run it on every captured M5+/M7 session: the plugin must not lower the cache-hit rate (invariant 9 in `docs/03` §12).
+
 ## 5. Evaluation protocol
 
 ### 5.1 Configurations

@@ -256,7 +256,7 @@ For tasks with verdict `delegate` (no or unusable self-summary) and for self fol
 **Phase 1 — generate (background, nothing waits for it).**
 
 - Started by the runner when a delegate task becomes due, from `pre-step` or `turn-stopping`, as an un-awaited promise. At most one generation per session at a time; others wait their turn.
-- The runner snapshots the region `(start, end)` and the list of span node seqs at start.
+- The runner snapshots the region `(start, end)` and a key over exactly the seqs the region covers at start; the key is recomputed before commit, and a mismatch drops the generated text (a later boundary regenerates it). The key deliberately ignores everything outside the region: the model keeps appending messages while the summary is generated, and a node added after the span makes neither the text stale nor the provider prefix wrong.
 - The request is taskfold's prefix-anchored envelope, corrected: the surface prefix (which begins with the in-history `system/message`) + the span + the instruction as the final user message; `tools` and `config` from the latest `request/header` (`state.lastHeaderSeq` → `eventAt`); `toolHistory: session.toolHistory()`; provider/model from (settings override → header config → agent options). Same prefix as the main requests, so the provider cache is reused.
 - The instruction (7.2) includes a numbered span index and a size budget.
 - Output validation: non-empty text that opens with a `## ` section after at most 3 short preamble lines, and is smaller than `maxSummaryRatio` × span. A failure counts as an attempt.
@@ -266,7 +266,7 @@ For tasks with verdict `delegate` (no or unusable self-summary) and for self fol
 
 - At the next `pre-step` or `turn-stopping`, if `pending[taskId]` exists and the task's region still resolves to the same `start`, `end` and node list, commit through the adapter with the prepared blocks (5.3 steps 3–7). If the region changed, drop the text and regenerate later.
 
-**Failure accounting.** A failed generation never reaches the compaction engine, so the host would not record it. To keep the cap durable (ADR 0005), the runner records each failed generation as a zero-cost failed attempt: `compactRegion` on the task's region with a `summarize()` that rejects immediately, which makes the host append `compaction/start` + `compaction/end{error}`. The reducer's existing `compaction/end{error}` row then counts it. After `maxDelegateFailures` (3) the task is `failed` and is never retried, across restarts.
+**Failure accounting.** A failed generation never reaches the compaction engine, so the host would not record it. To keep the cap durable (ADR 0005), the runner records each failed generation as a zero-cost failed attempt: `compactRegion` on the task's region with a `summarize()` that rejects immediately (`FoldEngine.rejectRegion` in `engine-adapter.js`), which makes the host append `compaction/start` + `compaction/end{error}`. The reducer's existing `compaction/end{error}` row then counts it. After `maxDelegateFailures` (3) the task is `failed` and is never retried, across restarts. The record is written only when the region still resolves; an error from writing it is logged once and never retried in a loop.
 
 **Restart.** A generated-but-uncommitted text is lost on restart and is regenerated (one extra billed call at most per restart per task). Generation never holds the compaction lock, never blocks a step and never holds the user's next message.
 
@@ -394,3 +394,4 @@ Only `minSpanTokens`, `delegateEnabled`, `minSummaryChars` and `maxSummaryRatio`
 6. No code path awaits an LLM call inside `pre-step` or `turn-stopping` (delegate generation may be *started* there as an un-awaited promise).
 7. Recall of a folded task returns exactly `deriveEventMessage` of its `shadowedSeqs`, in order.
 8. Replaying a log in which a task-mark result was later pruned (replaced) yields the same state as replaying it without the prune, apart from cut translation.
+9. A delegate request replays the main request's prefix byte-for-byte (the whole surface prefix before the task's span, then the span, then the instruction; `tools` and `toolHistory` unchanged), so its provider cache-hit ratio stays within 10 percentage points of the session's main requests and above 80 %. Measured by `scripts/verify-cache.js` over the session journal (`compaction/summary.data.usage` against `assistant/message.data.usage`); at hand-off the fixtures showed 97.8–99.1 % on main requests and 98.2 % on an LLM-backed checkpoint.

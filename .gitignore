@@ -12,3 +12,4 @@ test/fixtures/logs/*.raw.jsonl
 .m6-scratch/
 .m7-scratch-prompt/
 .m7-scratch/
+.f7-scratch/

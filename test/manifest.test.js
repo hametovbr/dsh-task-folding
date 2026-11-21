@@ -316,6 +316,84 @@ function dshField() {
   return MANIFEST.dsh
 }
 
+/**
+ * The caret range every `@deepseek-ai/*` host peer uses. The core host package defines the
+ * convention; keeping one range across the list means a host bump moves every peer together.
+ * @param {any} [manifest]
+ * @returns {string}
+ */
+export function hostPeerRange(manifest = MANIFEST) {
+  const range = manifest.peerDependencies?.['@deepseek-ai/dsh']
+  assert.equal(
+    typeof range,
+    'string',
+    'peerDependencies["@deepseek-ai/dsh"] must exist: it defines the host peer range convention',
+  )
+  assert.match(
+    /** @type {string} */ (range),
+    /^\^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u,
+    `the host peer range "${String(range)}" must be a caret range such as ^0.2.2-rc.1`,
+  )
+  return /** @type {string} */ (range)
+}
+
+/**
+ * Packages the tarball carries itself, whichever of npm's two spellings the manifest uses.
+ * @param {any} [manifest]
+ * @returns {Set<string>}
+ */
+export function bundledPackages(manifest = MANIFEST) {
+  const declared = manifest.bundledDependencies ?? manifest.bundleDependencies
+  if (declared === undefined) return new Set()
+  assert.ok(Array.isArray(declared), 'bundledDependencies/bundleDependencies must be a string array')
+  return new Set(/** @type {string[]} */ (declared))
+}
+
+/**
+ * Offline problems with `dsh.client.inject`. The host composes those packages into the client
+ * graph by name and silently skips a name the roster does not contain (`dsh-client-modules`
+ * `src/client/manifest.ts` + `system.ts`), so an undeclared injection leaves the slot empty with
+ * no error. Every injected name must therefore be a declared optional peer in the host range
+ * convention, or a `@deepseek-ai` package this tarball bundles itself.
+ * @param {any} [manifest]
+ * @returns {string[]} human-readable problems; empty when the declaration is sound
+ */
+export function injectProblems(manifest = MANIFEST) {
+  /** @type {string[]} */
+  const problems = []
+  const inject = manifest.dsh?.client?.inject
+  if (inject === undefined) return problems
+  if (!Array.isArray(inject) || inject.some((/** @type {unknown} */ name) => typeof name !== 'string')) {
+    return ['dsh.client.inject must be a string array']
+  }
+  const peers = manifest.peerDependencies ?? {}
+  const meta = manifest.peerDependenciesMeta ?? {}
+  const bundled = bundledPackages(manifest)
+  const range = hostPeerRange(manifest)
+  for (const name of /** @type {string[]} */ (inject)) {
+    const selfBundled = name.startsWith('@deepseek-ai/') && bundled.has(name)
+    if (!Object.hasOwn(peers, name)) {
+      if (!selfBundled) {
+        problems.push(
+          `dsh.client.inject "${name}" is not declared in peerDependencies and is not a ` +
+            '@deepseek-ai package the tarball bundles',
+        )
+      }
+      continue
+    }
+    if (meta[name]?.optional !== true) {
+      problems.push(`dsh.client.inject "${name}" must be an optional peer (peerDependenciesMeta)`)
+    }
+    if (peers[name] !== range) {
+      problems.push(
+        `dsh.client.inject "${name}" is ranged "${String(peers[name])}", but the host peer ` +
+          `convention is "${range}"`,
+      )
+    }
+  }
+  return problems
+}
+
 const PACKAGE_NAME = String(MANIFEST.name)
 
 test('package name is declared and version is plain semver with engines.node', () => {
@@ -406,6 +484,65 @@ test('dsh.client passes the host parseDshClient rules', () => {
     Object.hasOwn(exportsField(), './client'),
     'a dsh.client declaration requires exports["./client"]',
   )
+})
+
+test('dsh.client.inject names an optional peer in the host range convention', () => {
+  const dsh = dshField()
+  assert.ok(Array.isArray(dsh.client.inject) && dsh.client.inject.length > 0, 'the dock injects a package')
+  // The dock lives in the conversation's `conversation.input.dock` slot, so this package's client
+  // module only composes against a roster that contains the conversation UI.
+  assert.ok(
+    dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-conversation'),
+    'the conversation UI is the injected client package',
+  )
+  const problems = injectProblems()
+  assert.deepEqual(problems, [], problems.join('\n'))
+  for (const name of /** @type {string[]} */ (dsh.client.inject)) {
+    const range = /** @type {any} */ (MANIFEST).peerDependencies[name]
+    assert.equal(range, hostPeerRange(), `${name} must use the host peer range convention`)
+    assert.equal(MANIFEST.peerDependenciesMeta[name]?.optional, true, `${name} must be an optional peer`)
+  }
+})
+
+test('every @deepseek-ai peer is an optional peer in the one host range convention', () => {
+  const range = hostPeerRange()
+  /** @type {Record<string, unknown>} */
+  const peers = MANIFEST.peerDependencies
+  for (const [name, declared] of Object.entries(peers)) {
+    if (!name.startsWith('@deepseek-ai/')) continue
+    assert.equal(declared, range, `${name} must use the host peer range convention "${range}"`)
+    assert.equal(
+      MANIFEST.peerDependenciesMeta?.[name]?.optional,
+      true,
+      `${name} must be optional: a profile may not install it`,
+    )
+  }
+})
+
+test('the injection check rejects each way a declaration can break', () => {
+  // A negative self-test: the assertions above prove nothing unless the checker can fail. The
+  // historical F8 shape is the first case: an injected name with no peer declaration at all.
+  const injected = /** @type {any[]} */ (MANIFEST.dsh.client.inject)[0]
+  const withoutPeer = structuredClone(MANIFEST)
+  delete withoutPeer.peerDependencies[injected]
+  delete withoutPeer.peerDependenciesMeta[injected]
+  assert.match(injectProblems(withoutPeer).join('\n'), /is not declared in peerDependencies/u)
+
+  const wrongRange = structuredClone(MANIFEST)
+  wrongRange.peerDependencies[injected] = '^0.3.0'
+  assert.match(injectProblems(wrongRange).join('\n'), /host peer convention/u)
+
+  const required = structuredClone(MANIFEST)
+  required.peerDependenciesMeta[injected].optional = false
+  assert.match(injectProblems(required).join('\n'), /must be an optional peer/u)
+
+  // A `@deepseek-ai` package the tarball carries itself needs no peer: it is inside the package.
+  const bundled = structuredClone(MANIFEST)
+  delete bundled.peerDependencies[injected]
+  delete bundled.peerDependenciesMeta[injected]
+  bundled.bundledDependencies = [injected]
+  assert.deepEqual(injectProblems(bundled), [])
+  assert.deepEqual(injectProblems(MANIFEST), [])
 })
 
 test('every relative runtime import is covered by files', () => {

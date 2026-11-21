@@ -8,6 +8,7 @@
 | Property | Invariants over random event sequences | `test/properties.test.js` | every commit (1,000 cases) |
 | Replay | Projection from scratch vs from checkpoints | `test/replay.test.js` | every commit |
 | Component | Tools (including recall) and the fold runner against a fake session and fake engine | `test/tools.test.js`, `test/recall.test.js`, `test/fold-runner.test.js`, `test/engine-adapter.test.js`, `test/plugin.test.js` | every commit |
+| Package | Manifest and tarball contract: every `exports` path resolves, the `./client` loader form and `dsh.client` pass the host's own rules, patch rows are named after the package, `files` covers every runtime import, and the packed tarball ships no tests or CI | `test/manifest.test.js` (inside `npm test`), `scripts/check-pack.js` (`npm run pack:check`) | every commit, offline |
 | Contract | Adapter assumptions against published host packages | `scripts/contract-check.js` | Weekly and on demand (`.github/workflows/contract.yml`), and before each release; it needs network, so it never gates a push |
 | Live | Real DSH host, scripted sessions driven headlessly (`dsh --profile <p> --json [--session-id <id>] "<task>"`, profile = `dsh-base` + `dsh-headless` + this plugin; see [02 §11](02-host-api.md#11-operations-live)) | `test/live/` (needs API key) | before each release |
 | Evaluation | Task suite, three configurations | `eval/` | M7 and on demand |

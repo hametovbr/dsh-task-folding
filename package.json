@@ -1,13 +1,13 @@
 {
   "name": "dsh-task-folding",
   "version": "0.1.0",
-  "private": true,
   "description": "DeepSeek Harness plugin: wrap work in tasks and fold finished tasks into model-written summaries, with lossless recall.",
   "license": "MIT",
   "type": "module",
   "main": "./host/index.js",
   "exports": {
     ".": "./host/index.js",
+    "./package.json": "./package.json",
     "./client": "./client/client.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
@@ -57,6 +57,7 @@
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
     "contract": "node scripts/contract-check.js",
+    "pack:check": "node scripts/check-pack.js",
     "coverage": "node --test --experimental-test-coverage --test-coverage-include=host/projection.js --test-coverage-include=host/cuts.js --test-coverage-branches=100 --test-coverage-lines=100 --test-coverage-functions=100 \"test/**/*.test.js\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint . && prettier --check .",

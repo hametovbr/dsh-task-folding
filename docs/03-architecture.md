@@ -156,7 +156,9 @@ The summary text itself is NOT copied into meta: it already lives in the `task_e
 
 ### 4.2 Projection state
 
-Key `taskFolding`, `stateVersion: 1`. The authoritative typedefs are in `host/domain/types.js`; this is a summary.
+Key `taskFolding`, `stateVersion: 2`. The authoritative typedefs are in `host/domain/types.js`; this is a summary.
+Version 2 added the turn boundary (`turnSeq`, `turnStartSeq`) and `turnFolded` for the implicit turn fold
+(§5.6); the host discards a version-1 checkpoint and replays the log.
 
 ```ts
 type State = {
@@ -170,6 +172,9 @@ type State = {
   pendingSummary: number | null    // index of a FoldRow whose replacement has not arrived yet
   hintKey: string | null           // durable latch for the stale-task hint
   lastHeaderSeq: number | null     // latest request/header (tools + config for delegate requests)
+  turnSeq: number | null           // seq of the current turn's turn/start event (turn identity)
+  turnStartSeq: number | null      // first surface node after that boundary; -1 = absorbed
+  turnFolded: boolean              // a replacement touched a live task in this turn
 }
 
 type Task = {
@@ -209,14 +214,15 @@ Size: `folds` grows by one row per compaction (tens per long session); `tasks` b
 | Event | Transition |
 |---|---|
 | any surface event with `surfaceOp.op === 'replace'` | Handled by the replace row below and nothing else (in particular, its `meta` is never read). |
+| `turn/start` | A new turn begins: `turnSeq = seq`, `turnStartSeq = null`, `turnFolded = false`. Return the same state when those values did not change. |
 | `assistant/message` | Force-close an in-flight batch (interrupted). Note a surface append (below). `assistantCount += 1`; mark every waiting task `reported`. If the message carries a call named `task_begin` or `task_end`, open `batch = { msgSeq: seq, waiting: [all call ids], last: seq, begins: [], ends: [] }`. |
 | `tool/result` (append) | Note a surface append. If the result answers a call in `batch.waiting`: remove it, `last = seq`, and read `data.meta` if it has `tf: 1`: `begin` creates the task (`status: 'opening'`, pushed onto `open`, added to `begins`, `nextId = max(nextId, n + 1)`); `end` sets the target and its open `merged` descendants to `closing`, removes them from `open`, stores `endMsgSeq`, `endCallId`, verdict fields, adds them to `ends`. When `waiting` becomes empty, close the batch. Meta on a result outside the batch, malformed meta, a duplicate id, or an end for a task that is not open is ignored. |
 | `user/message`, `system/message` (append) | Note a surface append. A `user/message` with `data.source.kind === 'task-folding:hint'` sets `hintKey = data.source.key`. (`user/message` data is the message itself.) |
-| surface append (internal) | Every `open` task with `spanStart === null` gets `spanStart = seq`. |
+| surface append (internal) | Every `open` task with `spanStart === null` gets `spanStart = seq`; the turn gets `turnStartSeq = seq` while it is still null. |
 | `step/end` | Close an in-flight batch. |
 | batch close (internal) | `begins`: `beginCut = last`, `openedAt = assistantCount`, `opening → open`. `ends`: `endCut = last`, then the status: merged descendants (no verdict) → `merged`; meta verdict `below-floor`/`absorbed` → that; begin cut absorbed → `absorbed`; no span (`spanStart === null`, i.e. begun and ended in one batch) → `below-floor`; otherwise the meta verdict (`queued` or `delegate`). |
 | `compaction/summary` | Push a `FoldRow` (`nodeSeq: null`, `taskId: null`); `pendingSummary = its index`. |
-| replace (`surfaceOp.op === 'replace'`) | `S = set(sourceEventSeqs)`. If the event is a `user/message` and a fold row is pending, this is its node. For each non-terminal task: if the row is pending, the task is waiting, and `startSeq === spanStart && endSeq === endCut` → `folded` (row gets `taskId`, `nodeSeq`). Otherwise translate `beginCut`/`endCut` (2.4, "after") and `spanStart` ("first": survives only if the range starts exactly at it); a waiting task with any boundary absorbed → `absorbed`; an open task keeps running and closes `absorbed`. |
+| replace (`surfaceOp.op === 'replace'`) | `S = set(sourceEventSeqs)`. If the event is a `user/message` and a fold row is pending, this is its node. For each non-terminal task: if the row is pending, the task is waiting, and `startSeq === spanStart && endSeq === endCut` → `folded` (row gets `taskId`, `nodeSeq`). Otherwise translate `beginCut`/`endCut` (2.4, "after") and `spanStart` ("first": survives only if the range starts exactly at it); a waiting task with any boundary absorbed → `absorbed`; an open task keeps running and closes `absorbed`. Any replacement that moves or absorbs a live task sets `turnFolded` (§5.6). The turn's `turnStartSeq` is translated like a task's `spanStart` ("first"): the replacement node takes its place only when the range starts exactly at it, otherwise the boundary is absorbed (`-1`). |
 | `compaction/end` with `data.error` | Every `delegate` task: `failures += 1`; at `MAX_DELEGATE_FAILURES` (3) → `failed`. |
 | `request/header` | `lastHeaderSeq = seq`. |
 | anything else | unchanged (same reference) |
@@ -313,6 +319,49 @@ For tasks with verdict `delegate` (no or unusable self-summary) and for self fol
 - In practice the host's own engine is mounted before this plugin, so its hook runs first at a boundary; the contention case is real and was observed live in M3 (`m3/REPORT.md` §7.2).
 - The plugin MUST NOT modify the host's compaction instruction or wrap `ctx.llm.stream` (the taskfold anti-pattern).
 
+
+### 5.6 Implicit turn fold (the plugin gives the task itself)
+
+A model can ignore the discipline and never open a task. When a turn ends without a task fold, the
+plugin folds the turn's own span on the model's behalf, through the delegate path (§5.4), so such a
+model still gets the benefit. Q10 is settled: implemented, **on by default** (`implicitTurnFold`).
+
+**The rule.** `implicitTurnSpan(state, session, settings, estimator)` in `host/domain/planner.js`
+returns `{ startSeq, endSeq }` or `null` for the turn that just ended. The span runs from
+`state.turnStartSeq` (the first surface node after the latest `turn/start`, tracked by the projection,
+§4.2) through the last surface node. It is non-null only when:
+
+- (a) no task is open (`state.open` is empty);
+- (b) no replacement touched a live task in this turn (`state.turnFolded` is false) **and** no closed
+  task is still waiting for its own fold — folding the turn around a waiting task would swallow it;
+- (c) the span clears `minSpanTokens`, priced with the host token meter and the same floor the task
+  path uses (§6.2). The estimator is injected, as it is for `decideVerdict`, so the domain stays pure;
+- (d) `implicitTurnFold` is on;
+
+and the boundary still has a position on the surface (`turnStartSeq` is neither null nor `ABSORBED`).
+
+**The wiring.** At `agent/turn-stopping`, when the rule returns a span, the scheduler starts one
+delegate generation in the background (never awaited on the hot path) bound to the current surface
+epoch, exactly as it does for a delegate task; at a later boundary it commits the generated text
+through the same generation module, region key and compaction port. The job is keyed by its span, not
+by a task id, and lives in the `SessionRuntime` (`implicit` field, `implicitTurn` for the turn that
+already ran). Starting is refused while any generation is in flight (one per session) and for a turn
+that already started a turn fold, so a turn is never billed twice.
+
+**No task meta, no durable failure accounting.** The durable record is exactly the host's own auto
+compaction: a `compaction/summary` and a replacement of the turn's span. The projection records the
+fold row with `taskId: null`. Because there is no task, there is no `task_end` meta and no durable
+failure cap: a failed, cancelled or dropped generation is simply forgotten (one info line for a drop
+or a cancellation), and the turn stays unfolded. A turn that already committed a task fold is skipped
+by `turnFolded`, and after any fold the turn start moves to the replacement node, so the same nodes
+are never folded again.
+
+**What it costs.** One background summarizer call per turn whose span clears the floor and that ends
+without a task fold — roughly one extra billable call for a model that uses no tasks at all, and none
+for a session that closes its tasks. The turn's content survives only as the generated summary; the
+originals remain readable with `fold_recall` from the log like any other compaction. `implicitTurnFold`
+turns it off.
+
 ## 6. Tools (behavior)
 
 Exact schemas and texts: [04-tools-and-prompt.md](04-tools-and-prompt.md).
@@ -334,7 +383,7 @@ Exact schemas and texts: [04-tools-and-prompt.md](04-tools-and-prompt.md).
 - Verdict:
   - `estTokens < minSpanTokens` → `below-floor`;
   - `summary` shorter than `minSummaryChars` (default 200) or estimated summary tokens > `maxSummaryRatio` × `estTokens` (default 0.5) → `delegate` if `delegateEnabled`, else `queued` (and the host's "not smaller" check is the last guard);
-  - a usable summary whose fold would save less than the floor — `estTokens − summaryTokens < minSpanTokens` — → `below-floor`. The span includes the `task_end` message, and its arguments carry the summary, so a verbose summary would otherwise inflate the estimate and push a small task over the floor (observed in M2: a three-read task measured 1,999 tokens, much of it its own and its subtasks' summaries). With `maxSummaryRatio` ≤ 0.5 this rule only bites for spans between the floor and about twice the floor;
+  - a usable summary whose fold would save less than the floor — `estTokens − summaryTokens < minSpanTokens` — → `below-floor`. The implicit turn fold (§5.6) applies the same floor to the turn's span before it starts anything. The span includes the `task_end` message, and its arguments carry the summary, so a verbose summary would otherwise inflate the estimate and push a small task over the floor (observed in M2: a three-read task measured 1,999 tokens, much of it its own and its subtasks' summaries). With `maxSummaryRatio` ≤ 0.5 this rule only bites for spans between the floor and about twice the floor;
   - else `queued`.
 - Returns `{ ok: true, id, verdict, merged, remaining }`; meta `EndMeta`.
 
@@ -383,7 +432,7 @@ One hint only: the innermost open task has been open for `staleTaskSteps` (defau
 - Text: `Task T7 "<title>" has been open for 25+ steps. If it is finished, call task_end with a summary; if it has distinct parts, wrap the remaining parts in nested tasks.` Buckets at `staleTaskSteps`, twice and four times it — at the default threshold 25 that is 25, 50 and 100 steps; the text is byte-stable within a bucket, and scaling the buckets keeps the number truthful when the threshold is configured to something else.
 - Delivered by rewriting the pre-step decision: `{ ...decision, messages: [...decision.messages, hintMessage] }` with `source: { kind: 'task-folding:hint', key: '<id>:<bucket>' }`.
 - Latch: the projection records the last hint key; a hint is published only when its key differs. The latch is durable, so restarts do not re-publish.
-- No "no open task" hint (see 01, issue 11). An optional implicit per-turn task (open question, off by default) is the answer to forgotten discipline, not nagging.
+- No "no open task" hint (see 01, issue 11). The implicit turn fold (§5.6, 07 Q10) is the answer to forgotten discipline, not nagging; the hint stays for the model case, where a task is open and unfinished.
 
 Age is `assistantCount - task.openedAt`, both maintained by the projection in O(1).
 
@@ -399,6 +448,7 @@ Age is `assistantCount - task.openedAt`, both maintained by the projection in O(
 |---|---|---|---|
 | `minSpanTokens` | 2000 | 0–1,000,000 | Fold floor, judged at `task_end` |
 | `delegateEnabled` | true | bool | Allow the LLM fallback for missing/unusable self-summaries |
+| `implicitTurnFold` | true | bool | Fold a turn that ends without a task fold, once its span clears `minSpanTokens` (§5.6) |
 | `minSummaryChars` | 200 | 0–10,000 | Below this, a self-summary is unusable |
 | `maxSummaryRatio` | 0.5 | 0.05–0.9 | Above this share of the span, a self-summary is unusable |
 | `staleTaskSteps` | 25 | 5–1,000 | Stale-task hint threshold |
@@ -407,7 +457,7 @@ Age is `assistantCount - task.openedAt`, both maintained by the projection in O(
 
 All fields `.volatile()`; readers clamp invalid values to defaults instead of throwing.
 
-All fields are live: `minSpanTokens`, `delegateEnabled`, `minSummaryChars` and `maxSummaryRatio` decide the verdict in `task_end`, `minSpanTokens` also gates the fold saving; `staleTaskSteps` drives the hint buckets (8); `summarizationProvider`/`summarizationModel` override the delegate route (5.4); `showTaskBar` shows the dock (9). A realm `compaction-basic` configured with `thresholdRatio <= retainRatio` fails to mount at all — see `docs/02` §6.
+All fields are live: `minSpanTokens`, `delegateEnabled`, `minSummaryChars` and `maxSummaryRatio` decide the verdict in `task_end`, `minSpanTokens` also gates the fold saving and the implicit turn fold; `implicitTurnFold` switches the implicit turn fold (§5.6); `staleTaskSteps` drives the hint buckets (8); `summarizationProvider`/`summarizationModel` override the delegate route (5.4); `showTaskBar` shows the dock (9). A realm `compaction-basic` configured with `thresholdRatio <= retainRatio` fails to mount at all — see `docs/02` §6.
 
 ## 11. Failure modes
 
@@ -424,6 +474,8 @@ All fields are live: `minSpanTokens`, `delegateEnabled`, `minSummaryChars` and `
 | A tool marked `deferLoading` never receives a `tool_addition` in 0.2.2-rc.5 | Its definition stays out of context for the session, so the model may never call it; `fold_recall` is therefore not deferred (07 Q6, measured live). |
 | No session-projection service | The plugin does not activate: one warn line names the service and everything registered before it is disposed, exactly like a missing tool sink. Fold state has nowhere to live. |
 | No `llm` service | Delegate summaries are off; a `delegate` verdict leaves the task waiting; the one-shot line says so, and nothing retries. |
+| The delegate is unavailable when a turn ends without a task fold | The implicit fold is skipped; the one-shot "no LLM service" line already explains it, and nothing retries. |
+| A generated implicit turn summary is cancelled or its span moved | The text is dropped, one info line; no durable failure record, because the implicit fold has no task and no cap (§5.6). |
 | A journal carries `meta` written under another `stateVersion` | The payload is ignored (not reinterpreted); the projection keeps its own version and the log still replays. |
 | A journal event has a seq the host cannot have produced (negative, non-integer) | The event is ignored rather than used as a cut: a negative seq is the `ABSORBED` sentinel, and a task born collapsed would be silent corruption. |
 | The logger throws | Every runner log goes through a non-throwing helper: the original error keeps its message, nothing escapes `agent/pre-step`/`agent/turn-stopping`, and a failed delegate generation produces no unhandled rejection. Diagnostics never decide behaviour. |
@@ -441,3 +493,4 @@ All fields are live: `minSpanTokens`, `delegateEnabled`, `minSummaryChars` and `
 7. Recall of a folded task returns exactly `deriveEventMessage` of its `shadowedSeqs`, in order.
 8. Replaying a log in which a task-mark result was later pruned (replaced) yields the same state as replaying it without the prune, apart from cut translation.
 9. A delegate request replays the main request's prefix byte-for-byte (the whole surface prefix before the task's span, then the span, then the instruction; `tools` and `toolHistory` unchanged), so its provider cache-hit ratio stays within 10 percentage points of the session's main requests and above 80 %. Measured by `scripts/verify-cache.js` over the session journal (`compaction/summary.data.usage` against `assistant/message.data.usage`); at hand-off the fixtures showed 97.8–99.1 % on main requests and 98.2 % on an LLM-backed checkpoint.
+10. An implicit turn fold starts at most once per turn, writes no `task_end` meta, and leaves a fold row with `taskId: null`; a dropped or cancelled generation leaves no durable record (`test/implicit-turn.test.js`).

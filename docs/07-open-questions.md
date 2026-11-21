@@ -13,7 +13,7 @@ Each question names the assumption, why it matters, and how it was (or will be) 
 | [Q7](#q7) | Loader row, dock slot | Answered — confirmed |
 | [Q8](#q8) | Replacement events | Answered — confirmed, with precisions |
 | [Q9](#q9) | Concurrency in a batch | Answered — refuted (sequential) |
-| [Q10](#q10) | Implicit per-turn task | Open (after M7) |
+| [Q10](#q10) | Implicit per-turn task | Answered — implemented, on by default |
 | [Q11](#q11) | Recording a failed delegate generation | Answered — confirmed live in M5 |
 | [Q12](#q12) | Source of `system`/`tools` for delegate requests | Answered — request mirrors the host's; measured by `scripts/verify-cache.js` |
 | [Q13](#q13) | Collapsing an `outer` task after its children folded | Answered (M7): keep `below-floor` |
@@ -108,7 +108,9 @@ the always-on surface stays at ≈ 745 tokens (04 §4), which is still a third o
 ## Q10 — Implicit per-turn task
 
 **Open design question:** should a turn that ends with no open task and a span above the floor be folded automatically (delegate path)? It would cover models that ignore the discipline, at the cost of folding work the model may still want verbatim.
-**Settle:** after M7 data on how often tasks are skipped; off by default if added.
+**Answered (after M7): implemented, on by default.** The owner decided the plugin gives the task itself: when a turn ends and the model folded nothing, and the turn's own span is above the floor, the plugin folds that span through the delegate path. The durable write channel is still only `tool/result.meta`, so an implicit task cannot be recorded as a task; it is recorded exactly like the host's own auto compaction — a `compaction/summary` plus a replacement of the turn's span, with no `task_end` meta. The projection records the fold row with `taskId: null`, and `fold_recall` reads the turn's originals back like any other fold.
+**What it costs:** one background summarizer call per qualifying turn, and the turn's verbatim content leaves the surface (only the summary and the log remain). It does not fire when a task is open, when a replacement touched a task in the turn, when a closed task is still waiting for its own fold, when the span is below `minSpanTokens`, or when no summarizer exists. A failed, cancelled or dropped generation is forgotten with at most one info line: the implicit fold has no task and therefore no durable failure cap. `implicitTurnFold` (default true) turns it off.
+**Design:** 03 §5.6 (the rule `implicitTurnSpan`, the wiring, the guardrails), 03 §4.2 (the state bump to version 2), 03 §10 (the setting); tests in `test/implicit-turn.test.js`.
 
 <a id="q11"></a>
 ## Q11 — Recording a failed delegate generation durably

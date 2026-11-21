@@ -167,6 +167,8 @@ transition is a normal outcome, not a permanent skip.
  *  @property {SurfaceSnapshot} snapshot
  *  @property {Map<string, TaskRuntime>} tasks
  *  @property {Generation|null} generation   at most one per session
+ *  @property {ImplicitJob|null} implicit    the turn fold's generation (03 §5.6); span-keyed, no task
+ *  @property {number|null} implicitTurn      the turn that already ran an implicit fold
  *  @property {number} boundary               monotone pass counter
  */
 ```
@@ -251,6 +253,12 @@ Every outcome is a named transition of `SessionRuntime`, so the scheduler cannot
 same logic is spread over `startDelegate`, `delegateStep`, `commitDelegate`, `recordFailure`,
 `regionKeyOf` and three WeakMaps — and F9 was the cost of one missing re-read.
 
+The implicit turn fold (03 §5.6) does not add a second pipeline: it is the same `start` → `ready` →
+`commit` protocol with a span-keyed job instead of a task id, the same region key, and the same
+compaction port. Its one difference is the failure accounting: a task's failed generation is recorded
+durably because the cap must survive a restart, while the implicit fold has no task and no cap, so a
+failed or cancelled generation is dropped with one info line.
+
 ## 7. Ports and their guarantees
 
 | Port | Methods | Guarantee the plugin may rely on |
@@ -306,6 +314,10 @@ the projection (`state.hintKey`) as today. Two rules, one module:
   examples, not literals);
 - **empty span** — a task that closes with `spanStart` after `endCut` because the begin batch carried
   the work (Q15), hinted once at closing, keyed by task and reason.
+
+The implicit turn fold (03 §5.6, 07 Q10) is now the answer to forgotten discipline, so the prompt
+does not gain a "start a task" nag: the hint stays for the model case — a task that is open and
+unfinished — and a turn that ends without any task is handled silently by the plugin instead.
 
 ## 11. Client
 
@@ -429,8 +441,8 @@ The target architecture is reached when every line below holds. State as of 2026
 | No module outside `runtime/` keeps per-session state | **Met** for fold scheduling: one `WeakMap<session, SessionRuntime>` in `runtime/scheduler.js`; the runtime and its reducer are pure |
 | An epoch is part of every region resolution and every commit (F9 acceptance) | **Met** — `domain/surface.js` + `test/f9-surface-epoch.test.js` |
 | `foldRegion` no longer exists; `FoldRequest` carries `usage` and `source` | **Met** — `CompactionPort.fold(FoldRequest)`; `SummaryResult.source` is recorded, and the delegate commit logs it once (`runtime/generation.js`) |
-| Mutation score ≥ 85 % on `domain/`; the coverage gate covers `host/**/*.js` | **Partly**: the gate covers every `host/**/*.js` (99.9 / 95.3 / 98.7 after the move); `scripts/mutate.js` now targets `domain/cuts.js`, `domain/projection.js` and `domain/planner.js` (last measured 90 / 89.1 / 100 %) but has not been re-run since the rename |
-| F9, F7 and F8 acceptance; docs/09 T5/T6 E2E green | **F9 done**; F7 and F8 open; T5/T6 not started |
+| Mutation score ≥ 85 % on `domain/`; the coverage gate covers `host/**/*.js` | **Met**: the gate covers every `host/**/*.js` (99.9 / 94.0 / 98.4) and `npm run mutation` targets `domain/cuts.js`, `domain/projection.js`, `domain/planner.js`; the score is recorded in `docs/06` after the rename |
+| F9, F7 and F8 acceptance; docs/09 T5/T6 E2E green | **F9, F7 and F8 done**; T6 done (`scripts/e2e-browser.js`, 10/10); T5, T7 and T8 not started |
 
 The **module tree of §3 is the tree on disk** since step 8. What is still missing from the acceptance list
 is not structural: F7 and F8 (live settings persistence and the declared client-graph dependency) and the

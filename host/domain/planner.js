@@ -6,6 +6,8 @@ import { WAITING } from './projection.js'
 
 /** @typedef {import('./types.js').State} State */
 /** @typedef {import('./types.js').Task} Task */
+/** @typedef {import('./settings.js').Settings} Settings */
+/** @typedef {import('./estimate.js').SpanEstimator} SpanEstimator */
 
 /**
  * @typedef {{ kind: 'fold', start: number, end: number, startIndex: number, endIndex: number }} FoldRegion
@@ -67,4 +69,48 @@ export function resolveRegion(task, nodes) {
     return { kind: 'inconsistent', reason: 'span does not start after its begin cut' }
   if (startIndex > endIndex) return { kind: 'empty' }
   return { kind: 'fold', start: spanStart, end: endCut, startIndex, endIndex }
+}
+
+/**
+ * The span of the turn that just ended without a fold (docs/03 §5.6, docs/07 Q10): from the first
+ * surface node after the latest turn boundary through the last node of the surface.
+ *
+ * The rule answers null unless all of the following hold:
+ *
+ * - (a) no task is open;
+ * - (b) no replacement touched a live task in this turn (`state.turnFolded`) and no closed task is
+ *   still waiting for its own fold — folding the turn around a waiting task would swallow it;
+ * - (c) the span clears `minSpanTokens`, priced with the same host meter and floor the task path
+ *   uses (the estimator is injected, as it is for `decideVerdict`, so the rule stays pure);
+ * - (d) `settings.implicitTurnFold` is on;
+ *
+ * and the turn has a boundary that still has a position on the surface (`turnStartSeq` not null and
+ * not `ABSORBED`) and the span holds at least one node.
+ *
+ * @param {State} state
+ * @param {import('./estimate.js').SessionLike} session
+ * @param {Settings} settings
+ * @param {SpanEstimator} estimator
+ * @returns {{ startSeq: number, endSeq: number } | null}
+ */
+export function implicitTurnSpan(state, session, settings, estimator) {
+  const start = state.turnStartSeq
+  if (start === null || start < 0) return null
+  const nodes = session.surface.nodes
+  const startIndex = nodes.indexOf(start)
+  if (startIndex === -1) return null
+  const endIndex = nodes.length - 1
+  if (endIndex < startIndex) return null
+  // (a) and (b): nothing the turn's own fold could shadow is still owed to a task.
+  if (state.open.length > 0) return null
+  if (state.turnFolded) return null
+  for (const id of state.order) {
+    const task = state.tasks[id]
+    if (task && WAITING.has(task.status)) return null
+  }
+  // (d) before (c): the floor costs a host estimation pass over the span, and a disabled rule must
+  // not pay for it.
+  if (!settings.implicitTurnFold) return null
+  if (estimator.regionTokens(session, nodes, startIndex, endIndex) < settings.minSpanTokens) return null
+  return { startSeq: start, endSeq: /** @type {number} */ (nodes[endIndex]) }
 }

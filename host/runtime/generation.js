@@ -33,12 +33,19 @@ import { MAX_TASK_ATTEMPTS, isBackingOff, skipReason } from './session-runtime.j
  */
 
 /**
+ * What a delegate generation summarizes: a closed task, or the turn itself on the implicit path.
+ * The request is built from the region, so only `id` is informative to the seam.
+ *
+ * @typedef {{ id: string | null, title: string }} DelegateTarget
+ */
+
+/**
  * The delegate summarizer seam (ports/llm.js). It is injected so this module stays testable without
  * the real summarizer and so the plugin works when none can be built.
  *
  * @typedef {object} DelegateGeneration
  * @property {() => boolean} supports whether this process can build a summarizer
- * @property {(agent: any, task: Task, region: DelegateRegion, signal: AbortSignal | undefined) => Promise<{ blocks: any[], regionKey: string, usage?: any } | null>} start
+ * @property {(agent: any, target: DelegateTarget, region: DelegateRegion, signal: AbortSignal | undefined) => Promise<{ blocks: any[], regionKey: string, usage?: any } | null>} start
  *   starts the un-awaited generation; resolves the prepared blocks or null when no usable summary
  *   was produced
  */
@@ -336,5 +343,200 @@ export function createGeneration(deps) {
     return `${region.start}:${region.end}:${seqs.join(',')}`
   }
 
-  return { start, stepDelegate, recordFailure, delegateSupported, pendingFor }
+  // -------------------------------------------------------------------------
+  // The implicit turn fold (docs/03 §5.6, docs/07 Q10). It reuses the delegate seam, the region
+  // key and the commit path of a delegate task; only its identity differs — the span, not a task.
+
+  /**
+   * Phase 1 of the implicit turn fold: start the one background generation a turn whose span clears
+   * the floor gets. Returns whether a generation was started.
+   *
+   * @param {any} agent
+   * @param {any} session
+   * @param {{ startSeq: number, endSeq: number }} span the span the rule returned
+   * @param {Snapshot} snap
+   * @param {CompactionPort} engine
+   * @param {AbortSignal | undefined} signal
+   * @returns {boolean}
+   */
+  function startImplicit(agent, session, span, snap, engine, signal) {
+    const delegate = deps.delegate
+    if (delegate === undefined || !delegateSupported()) return false
+    const runtime = deps.runtimeOf(session)
+    const turn = snap.state.turnSeq
+    if (turn === null) return false
+    // One generation per session at a time, and at most one implicit fold per turn (docs/03 §5.6).
+    if (runtime.implicit !== null || runtime.generation !== null) return false
+    if (runtime.implicitTurn === turn) return false
+    const startIndex = snap.nodes.indexOf(span.startSeq)
+    const endIndex = snap.nodes.indexOf(span.endSeq)
+    if (startIndex === -1 || endIndex === -1 || startIndex > endIndex) return false
+    /** @type {FoldRegion} */
+    const region = {
+      kind: /** @type {const} */ ('fold'),
+      start: span.startSeq,
+      end: span.endSeq,
+      startIndex,
+      endIndex,
+    }
+    if (!deps.balanced(engine, session, region)) return false
+    startImplicitGeneration(agent, session, region, snap.epoch, turn, runtime.boundary, signal)
+    return true
+  }
+
+  /**
+   * @param {any} agent
+   * @param {any} session
+   * @param {FoldRegion} region
+   * @param {number} epoch
+   * @param {number} turn
+   * @param {number} id
+   * @param {AbortSignal | undefined} signal
+   */
+  function startImplicitGeneration(agent, session, region, epoch, turn, id, signal) {
+    const delegate = deps.delegate
+    if (delegate === undefined) return
+    const regionKey = regionKeyOf(region, session.surface.nodes)
+    /** @type {DelegateRegion} */
+    const request = { ...region, regionKey }
+    /** @type {DelegateTarget} */
+    const target = { id: null, title: '' }
+    // Promise.resolve() defers the call by one microtask so the job exists before any settlement;
+    // the rejection handler keeps a failed turn summary from surfacing as an unhandled rejection.
+    Promise.resolve()
+      .then(() => delegate.start(agent, target, request, signal))
+      .then(
+        (result) => {
+          if (result === null) {
+            // The summarizer answered, but with nothing usable. One line; the turn stays unfolded
+            // and is not retried (docs/03 §5.6).
+            deps.log('info', 'task-folding: no usable summary for the turn; it stays unfolded')
+            settleImplicit(session, id, 'failed')
+          } else settleImplicit(session, id, 'ok', result.blocks, result.usage)
+        },
+        (error) => {
+          // An interrupted turn produced nothing; there is no durable record and no retry
+          // (docs/03 §5.6), so the text is simply dropped.
+          if (signal?.aborted === true) {
+            deps.log('info', 'task-folding: the turn summary was cancelled with the turn')
+            settleImplicit(session, id, 'cancelled')
+            return
+          }
+          const message = error instanceof Error ? error.message : String(error)
+          deps.log('info', `task-folding: no summary for the turn: ${message}`)
+          settleImplicit(session, id, 'failed')
+        },
+      )
+    deps.apply(session, {
+      type: 'start-implicit',
+      id,
+      turn,
+      epoch,
+      start: region.start,
+      end: region.end,
+      startIndex: region.startIndex,
+      endIndex: region.endIndex,
+      regionKey,
+    })
+  }
+
+  /**
+   * @param {any} session
+   * @param {number} id
+   * @param {'ok' | 'failed' | 'cancelled'} outcome
+   * @param {any[]} [blocks]
+   * @param {any} [usage]
+   */
+  function settleImplicit(session, id, outcome, blocks, usage) {
+    deps.apply(session, {
+      type: 'implicit-finished',
+      id,
+      outcome,
+      ...(blocks === undefined ? {} : { blocks }),
+      ...(usage === undefined ? {} : { usage }),
+    })
+  }
+
+  /**
+   * Phase 2 of the implicit turn fold: commit a generated turn summary at a later boundary, when
+   * the span it was written for still describes the surface. A commit that cannot happen drops the
+   * text — the implicit fold has no durable failure accounting (docs/03 §5.6).
+   *
+   * @param {any} agent
+   * @param {any} session
+   * @param {Snapshot} snap
+   * @param {CompactionPort} engine
+   * @param {AbortSignal | undefined} signal
+   * @returns {Promise<'folded' | 'busy' | 'dropped' | 'none'>}
+   */
+  async function commitImplicit(agent, session, snap, engine, signal) {
+    const job = deps.runtimeOf(session).implicit
+    if (job === null || job.phase !== 'ready') return 'none'
+    const startIndex = snap.nodes.indexOf(job.start)
+    const endIndex = snap.nodes.indexOf(job.end)
+    if (startIndex === -1 || endIndex === -1 || startIndex > endIndex) {
+      dropImplicit(session, job.id, 'its span is no longer on the surface')
+      return 'dropped'
+    }
+    /** @type {FoldRegion} */
+    const region = {
+      kind: /** @type {const} */ ('fold'),
+      start: job.start,
+      end: job.end,
+      startIndex,
+      endIndex,
+    }
+    if (regionKeyOf(region, snap.nodes) !== job.regionKey) {
+      dropImplicit(
+        session,
+        job.id,
+        `the span changed while its summary was generated (surface ${job.epoch} -> ${snap.epoch})`,
+      )
+      return 'dropped'
+    }
+    if (!deps.balanced(engine, session, region)) {
+      dropImplicit(session, job.id, 'the span is not tool-pairing balanced')
+      return 'dropped'
+    }
+    try {
+      await engine.fold({
+        agent,
+        region: { startSeq: region.start, endSeq: region.end },
+        blocks: job.blocks ?? [],
+        route: deps.routeOf(snap.state, session, agent),
+        usage: job.usage,
+        signal,
+      })
+      deps.apply(session, { type: 'implicit-committed', id: job.id })
+      // The host records our summary unmarked, so this line is the only record of who wrote it.
+      deps.log('info', 'task-folding: fold committed for the turn source=delegate')
+      return 'folded'
+    } catch (error) {
+      // A busy lock is not an error: the job waits and the next boundary retries it.
+      if (engine.classify(error) === 'busy') return 'busy'
+      const message = error instanceof Error ? error.message : String(error)
+      dropImplicit(session, job.id, message)
+      return 'dropped'
+    }
+  }
+
+  /**
+   * @param {any} session
+   * @param {number} id
+   * @param {string} reason
+   */
+  function dropImplicit(session, id, reason) {
+    deps.apply(session, { type: 'implicit-dropped', id })
+    deps.log('info', `task-folding: the turn summary is dropped: ${reason}`)
+  }
+
+  return {
+    start,
+    stepDelegate,
+    recordFailure,
+    startImplicit,
+    commitImplicit,
+    delegateSupported,
+    pendingFor,
+  }
 }

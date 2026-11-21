@@ -1,7 +1,7 @@
 // The taskFolding session projection (docs/03-architecture.md §4). Pure: no ctx, no I/O.
 // apply() returns the same reference for events that change nothing.
 
-import { ABSORBED, isAbsorbed, translateTask } from './cuts.js'
+import { ABSORBED, isAbsorbed, translateFirst, translateTask } from './cuts.js'
 import { HINT_SOURCE_KIND, classify, replaceOp } from './journal.js'
 import { nextEpoch } from './surface.js'
 
@@ -16,7 +16,9 @@ import { nextEpoch } from './surface.js'
 /** @typedef {import('./types.js').View} View */
 
 export const PROJECTION_KEY = 'taskFolding'
-export const STATE_VERSION = 1
+// 2 added the turn boundary (turnSeq/turnStartSeq) and turnFolded, which the implicit turn fold
+// (docs/03 §5.6) needs; the host discards an older checkpoint and replays the log.
+export const STATE_VERSION = 2
 export const META_TAG = 1
 export const TASK_TOOLS = Object.freeze(['task_begin', 'task_end'])
 export { HINT_SOURCE_KIND }
@@ -45,6 +47,9 @@ export function initialState() {
     hintKey: null,
     lastHeaderSeq: null,
     surfaceEpoch: 0,
+    turnSeq: null,
+    turnStartSeq: null,
+    turnFolded: false,
   }
 }
 
@@ -63,6 +68,10 @@ export function init(_header, _inheritedEventCount) {
  * @returns {State}
  */
 export function apply(state, event) {
+  // A turn boundary is not a surface event, but it is where the turn's span starts. The reducer
+  // records it for the implicit turn fold (docs/03 §5.6); journal.js still classifies it as
+  // `ignore`, so the boundary is handled here, before the dispatch.
+  if (event.type === 'turn/start') return onTurnStart(state, event.seq)
   switch (classify(event)) {
     case 'surface':
       return onSurface(state, event)
@@ -79,6 +88,23 @@ export function apply(state, event) {
     default:
       return state
   }
+}
+
+/**
+ * A new turn begins: the previous turn's boundary and fold facts stop applying. `turnSeq` identifies
+ * the new turn — a `turn/start` seq is unique within a session, so the runtime never confuses two
+ * turns that start at the same surface seq.
+ *
+ * @param {State} state
+ * @param {number} seq the `turn/start` event seq
+ * @returns {State}
+ */
+function onTurnStart(state, seq) {
+  // A log can carry an impossible seq; a boundary that cannot be numbered is not remembered, so
+  // the turn keeps the previous identity instead of becoming one the runtime cannot compare.
+  const turnSeq = Number.isInteger(seq) && seq >= 0 ? seq : state.turnSeq
+  if (state.turnSeq === turnSeq && state.turnStartSeq === null && !state.turnFolded) return state
+  return { ...state, turnSeq, turnStartSeq: null, turnFolded: false }
 }
 
 /**
@@ -242,6 +268,10 @@ function applyReplace(state, event, op) {
   }
 
   let tasks = state.tasks
+  // A replacement that touches a live task moved its work: the turn must not fold around it. This
+  // is the durable half of "a turn that ends after another fold does not fold the same nodes"
+  // (docs/03 §5.6): a task that is folded or absorbed in this turn blocks the implicit fold.
+  let touched = state.turnFolded
   for (const id of state.order) {
     const task = tasks[id]
     if (!task || TERMINAL.has(task.status)) continue
@@ -256,7 +286,10 @@ function applyReplace(state, event, op) {
       if (next !== task && WAITING.has(next.status) && isAbsorbed(next))
         next = { ...next, status: 'absorbed' }
     }
-    if (next !== task) tasks = { ...tasks, [id]: next }
+    if (next !== task) {
+      tasks = { ...tasks, [id]: next }
+      touched = true
+    }
   }
 
   if (foldIndex !== null) {
@@ -266,7 +299,15 @@ function applyReplace(state, event, op) {
   // The epoch moves even when no task was touched: a replacement that only removed a neighbouring
   // node still changed the surface another consumer may have observed (docs/10 §4.1). A missing
   // field is a checkpoint written before the epoch existed, so it starts from zero.
-  return { ...state, tasks, folds, pendingSummary, surfaceEpoch: nextEpoch(state) }
+  return {
+    ...state,
+    tasks,
+    folds,
+    pendingSummary,
+    surfaceEpoch: nextEpoch(state),
+    turnStartSeq: translateFirst(state.turnStartSeq, shadowed, op, event.seq),
+    turnFolded: touched,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -383,7 +424,8 @@ function closedStatus(task) {
 }
 
 /**
- * The first surface node after a begin batch starts that task's span.
+ * The first surface node after a begin batch starts that task's span; the first surface node after
+ * a turn boundary starts the turn's span the implicit fold uses (docs/03 §5.6).
  *
  * @param {State} state
  * @param {number} seq
@@ -397,7 +439,9 @@ function noteSurfaceAppend(state, seq) {
       tasks = { ...tasks, [id]: { ...task, spanStart: seq } }
     }
   }
-  return tasks === state.tasks ? state : { ...state, tasks }
+  const turnStartSeq = state.turnStartSeq === null ? seq : state.turnStartSeq
+  if (tasks === state.tasks && turnStartSeq === state.turnStartSeq) return state
+  return { ...state, tasks, turnStartSeq }
 }
 
 /**
@@ -535,6 +579,19 @@ export function parseState(value) {
   if (value.pendingSummary !== null && !Number.isInteger(value.pendingSummary)) fail('pendingSummary')
   if (value.hintKey !== null && typeof value.hintKey !== 'string') fail('hintKey')
   if (value.lastHeaderSeq !== null && !Number.isInteger(value.lastHeaderSeq)) fail('lastHeaderSeq')
+  // The turn fields are what the implicit turn fold reads (docs/03 §5.6). A state from before the
+  // schema bump is discarded by the host, so a missing field is a bug, not an old checkpoint.
+  if (
+    value.turnSeq !== null &&
+    (!Number.isInteger(value.turnSeq) || /** @type {number} */ (value.turnSeq) < 0)
+  )
+    fail('turnSeq')
+  if (
+    value.turnStartSeq !== null &&
+    (!Number.isInteger(value.turnStartSeq) || /** @type {number} */ (value.turnStartSeq) < ABSORBED)
+  )
+    fail('turnStartSeq')
+  if (typeof value.turnFolded !== 'boolean') fail('turnFolded')
   // A checkpoint written before the epoch existed has no field; the reducer starts it from zero and
   // every replacement after that is counted, so an old log still replays.
   if (value.surfaceEpoch !== undefined) {

@@ -88,6 +88,7 @@ test('M0 journals: ignored events return the same state reference', () => {
     'step/end',
     'request/header',
     'compaction/summary',
+    'turn/start',
   ])
   for (const event of events) {
     const next = apply(state, event)

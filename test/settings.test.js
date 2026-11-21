@@ -10,6 +10,7 @@ test('defaults match the documented table', () => {
   assert.deepEqual(defaults(), {
     minSpanTokens: 2000,
     delegateEnabled: true,
+    implicitTurnFold: true,
     minSummaryChars: 200,
     maxSummaryRatio: 0.5,
     staleTaskSteps: 25,
@@ -23,6 +24,7 @@ test('readSettings unwraps volatile readers and clamps out-of-range values', () 
   const config = withVolatiles({
     minSpanTokens: 500,
     delegateEnabled: false,
+    implicitTurnFold: true,
     minSummaryChars: 50,
     maxSummaryRatio: 0.2,
     staleTaskSteps: 40,
@@ -33,6 +35,7 @@ test('readSettings unwraps volatile readers and clamps out-of-range values', () 
   assert.deepEqual(readSettings(config), {
     minSpanTokens: 500,
     delegateEnabled: false,
+    implicitTurnFold: true,
     minSummaryChars: 50,
     maxSummaryRatio: 0.2,
     staleTaskSteps: 40,

@@ -5,6 +5,7 @@
  * @typedef {object} Settings
  * @property {number} minSpanTokens
  * @property {boolean} delegateEnabled
+ * @property {boolean} implicitTurnFold
  * @property {number} minSummaryChars
  * @property {number} maxSummaryRatio
  * @property {number} staleTaskSteps
@@ -19,6 +20,7 @@
 export const FIELDS = Object.freeze({
   minSpanTokens: { kind: 'number', def: 2000, min: 0, max: 1_000_000, integer: true },
   delegateEnabled: { kind: 'boolean', def: true },
+  implicitTurnFold: { kind: 'boolean', def: true },
   minSummaryChars: { kind: 'number', def: 200, min: 0, max: 10_000, integer: true },
   maxSummaryRatio: { kind: 'number', def: 0.5, min: 0.05, max: 0.9, integer: false },
   staleTaskSteps: { kind: 'number', def: 25, min: 5, max: 1000, integer: true },
@@ -31,6 +33,7 @@ export const FIELDS = Object.freeze({
 const DESCRIPTIONS = Object.freeze({
   minSpanTokens: 'A closed task smaller than this many tokens is never folded.',
   delegateEnabled: 'Summarize a task automatically when its own summary is missing or unusable.',
+  implicitTurnFold: 'Summarize a turn that ends without a task fold, once its span clears the floor.',
   minSummaryChars: 'A task summary shorter than this is treated as missing.',
   maxSummaryRatio: 'A task summary larger than this share of the task is treated as unusable.',
   staleTaskSteps: 'Remind the model about a task that stays open for this many steps.',

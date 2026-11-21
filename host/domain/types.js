@@ -104,6 +104,9 @@
  * @property {string | null} hintKey
  * @property {number | null} lastHeaderSeq
  * @property {number} surfaceEpoch version of the surface node list; increments on every replacement
+ * @property {number | null} turnSeq the `turn/start` event seq of the current turn (its identity)
+ * @property {number | null} turnStartSeq first surface node after that boundary; -1 = absorbed
+ * @property {boolean} turnFolded a replacement touched a live task in this turn
  */
 
 /**

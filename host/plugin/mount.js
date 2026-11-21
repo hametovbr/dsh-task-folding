@@ -182,6 +182,8 @@ export function apply(ctx, config) {
     estimator,
     log: logPort, // the port, so a throwing sink cannot break the pass
     delegate,
+    // The implicit turn fold reads its switch and its floor from the live config (docs/03 §5.6).
+    settings: () => readSettings(config),
   })
   // The pre-step sequence (fold → hint → decision) lives in one module, so the two handlers can
   // never disagree about what the decision is (docs/10 §5, §16 step 7).

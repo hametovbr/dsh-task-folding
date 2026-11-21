@@ -623,7 +623,7 @@ test('a begin meta whose title is not a string is ignored', () => {
     assertNoTask(stateAfterBeginMeta({ ...beginMeta(), title }))
 })
 
-test('the registered projection keeps malformed meta out of state and still reports version 1', async () => {
+test('the registered projection keeps malformed meta out of state and still reports its version', async () => {
   resetCompactionPort()
   const fake = fakeContext()
   await createCompactionPort(fake.ctx, { loader: async () => null })
@@ -633,7 +633,7 @@ test('the registered projection keeps malformed meta out of state and still repo
   assert.ok(definition)
   assert.equal(definition.key, PROJECTION_KEY)
   assert.equal(definition.stateVersion, STATE_VERSION)
-  assert.equal(STATE_VERSION, 1, 'the version the plugin reports has not moved')
+  assert.equal(STATE_VERSION, 2, 'the version the plugin reports has not moved')
   assert.equal(definition.apply, apply, 'the registered reducer is the pure projection reducer')
 
   // One replay through the plugin's own registration, over every value this suite expects the
@@ -675,7 +675,7 @@ test('a foreign-realm log keeps the projection on its own state version and does
   // passes `stateVersion: STATE_VERSION` to the registration, and the reducer's meta validators
   // (host/domain/projection.js:449-456, 462-474) check only tf/op/fields — no meta `stateVersion` is read.
   assert.equal(definition.stateVersion, STATE_VERSION)
-  assert.equal(definition.stateVersion, 1)
+  assert.equal(definition.stateVersion, 2)
 
   // A replay of a session whose meta carries an unknown stateVersion: the payload is not ours to
   // interpret, so it is ignored — the task is never created, the reported version does not move and

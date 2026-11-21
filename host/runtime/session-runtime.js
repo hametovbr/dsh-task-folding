@@ -45,9 +45,29 @@ export const MAX_TASK_ATTEMPTS = MAX_DELEGATE_FAILURES
  */
 
 /**
+ * A generated turn summary waiting for the next boundary to commit it (docs/03 §5.6). It has no
+ * task id: the implicit fold is keyed by its span and leaves no `task_end` meta behind.
+ *
+ * @typedef {object} ImplicitJob
+ * @property {number} id the pass boundary that started it, unique within the session
+ * @property {number} turn the `turn/start` seq of the turn it summarizes
+ * @property {number} epoch the surface epoch its region was resolved at
+ * @property {number} start
+ * @property {number} end
+ * @property {number} startIndex
+ * @property {number} endIndex
+ * @property {string} regionKey
+ * @property {'generating'|'ready'} phase
+ * @property {any[]|null} blocks the generated blocks, once the generation succeeded
+ * @property {any} usage the provider accounting, once the generation succeeded
+ */
+
+/**
  * @typedef {object} SessionRuntime
  * @property {Map<string, TaskRuntime>} tasks
  * @property {{ taskId: string, epoch: number, regionKey: string }|null} generation
+ * @property {ImplicitJob|null} implicit the turn fold's generation, at most one per session
+ * @property {number|null} implicitTurn the turn the implicit fold already ran for
  * @property {number} boundary
  * @property {boolean} busy
  */
@@ -146,14 +166,42 @@ export const MAX_TASK_ATTEMPTS = MAX_DELEGATE_FAILURES
  */
 
 /**
+ * @typedef {object} StartImplicit
+ * @property {'start-implicit'} type
+ * @property {number} id
+ * @property {number} turn
+ * @property {number} epoch
+ * @property {number} start
+ * @property {number} end
+ * @property {number} startIndex
+ * @property {number} endIndex
+ * @property {string} regionKey
+ */
+
+/**
+ * @typedef {object} ImplicitFinished
+ * @property {'implicit-finished'} type
+ * @property {number} id
+ * @property {'ok'|'failed'|'cancelled'} outcome
+ * @property {any[]} [blocks] the prepared blocks, on the `ok` outcome
+ * @property {any} [usage] the provider accounting, on the `ok` outcome
+ */
+
+/**
+ * @typedef {object} ImplicitCleared
+ * @property {'implicit-committed'|'implicit-dropped'} type
+ * @property {number} id
+ */
+
+/**
  * @typedef {EnterPass | LeavePass | BoundaryTick | StartGeneration | GenerationFinished
  *   | CommitAction | DropPending | Skip | UnsplitSkip | Retry | ClearRetry | RecordFailure
- *   | ClaimRejectLog | PruneTerminal} Action
+ *   | ClaimRejectLog | PruneTerminal | StartImplicit | ImplicitFinished | ImplicitCleared} Action
  */
 
 /** @returns {SessionRuntime} */
 export function createSessionRuntime() {
-  return { tasks: new Map(), generation: null, boundary: 0, busy: false }
+  return { tasks: new Map(), generation: null, implicit: null, implicitTurn: null, boundary: 0, busy: false }
 }
 
 /**
@@ -294,6 +342,13 @@ export function reduce(runtime, action) {
       return claimRejectLog(runtime, action)
     case 'prune-terminal':
       return pruneTerminal(runtime, action)
+    case 'start-implicit':
+      return startImplicit(runtime, action)
+    case 'implicit-finished':
+      return implicitFinished(runtime, action)
+    case 'implicit-committed':
+    case 'implicit-dropped':
+      return clearImplicit(runtime, action)
     default:
       return runtime
   }
@@ -309,6 +364,8 @@ export function reduce(runtime, action) {
  */
 function startGeneration(runtime, action) {
   if (runtime.generation !== null) return runtime
+  // A turn fold's generation is also an LLM call: one generation per session at a time (docs/10 §6).
+  if (runtime.implicit !== null && runtime.implicit.phase === 'generating') return runtime
   const task = entryOf(runtime, action.taskId)
   if (task.attempts >= MAX_TASK_ATTEMPTS) return runtime
   const next = withTask(runtime, action.taskId, {
@@ -510,6 +567,71 @@ function recordFailure(runtime, action) {
     attempts,
     phase: action.recorded && attempts >= MAX_TASK_ATTEMPTS ? 'failed' : 'waiting',
   })
+}
+
+/**
+ * Start at most one implicit turn generation per session and per turn (docs/03 §5.6). A second
+ * start is refused while a generation is in flight, after one was already committed or dropped for
+ * the same turn (`implicitTurn`), and for a state the caller could not bind to a turn.
+ *
+ * @param {SessionRuntime} runtime
+ * @param {StartImplicit} action
+ * @returns {SessionRuntime}
+ */
+function startImplicit(runtime, action) {
+  if (runtime.implicit !== null || runtime.generation !== null) return runtime
+  if (runtime.implicitTurn === action.turn) return runtime
+  /** @type {ImplicitJob} */
+  const job = {
+    id: action.id,
+    turn: action.turn,
+    epoch: action.epoch,
+    start: action.start,
+    end: action.end,
+    startIndex: action.startIndex,
+    endIndex: action.endIndex,
+    regionKey: action.regionKey,
+    phase: 'generating',
+    blocks: null,
+    usage: undefined,
+  }
+  return { ...runtime, implicit: job, implicitTurn: action.turn }
+}
+
+/**
+ * The turn's generation settled. A failure or a cancellation drops the job silently: the implicit
+ * fold has no durable failure accounting (docs/03 §5.6), so the cap's counter is not touched.
+ *
+ * @param {SessionRuntime} runtime
+ * @param {ImplicitFinished} action
+ * @returns {SessionRuntime}
+ */
+function implicitFinished(runtime, action) {
+  const job = runtime.implicit
+  if (job === null || job.id !== action.id || job.phase !== 'generating') return runtime
+  if (action.outcome !== 'ok') return { ...runtime, implicit: null }
+  return {
+    ...runtime,
+    implicit: {
+      ...job,
+      phase: 'ready',
+      blocks: action.blocks ?? [],
+      usage: action.usage,
+    },
+  }
+}
+
+/**
+ * The job's one terminal outcome: committed, or dropped because the surface moved under it.
+ *
+ * @param {SessionRuntime} runtime
+ * @param {ImplicitCleared} action
+ * @returns {SessionRuntime}
+ */
+function clearImplicit(runtime, action) {
+  const job = runtime.implicit
+  if (job === null || job.id !== action.id) return runtime
+  return { ...runtime, implicit: null }
 }
 
 /**

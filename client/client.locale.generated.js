@@ -20,6 +20,9 @@ window.__ModuleLoader__.load({
       'settings.fields.delegateEnabled.label': 'Automatic summaries',
       'settings.fields.delegateEnabled.description':
         'Summarize a task automatically when its own summary is missing or unusable.',
+      'settings.fields.implicitTurnFold.label': 'Summarize unfurled turns',
+      'settings.fields.implicitTurnFold.description':
+        'Summarize a turn that ends without a task fold, once its span clears the fold floor.',
       'settings.fields.minSummaryChars.label': 'Minimum summary length',
       'settings.fields.minSummaryChars.description':
         'A task summary shorter than this is treated as missing.',

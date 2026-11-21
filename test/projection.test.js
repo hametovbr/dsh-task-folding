@@ -41,7 +41,7 @@ function assertFoldableAndBalanced(sim, id) {
 
 test('constants and init', () => {
   assert.equal(PROJECTION_KEY, 'taskFolding')
-  assert.equal(STATE_VERSION, 1)
+  assert.equal(STATE_VERSION, 2)
   assert.deepEqual(init({}, 0), initialState())
 })
 
@@ -524,10 +524,16 @@ test('replace ops on non-surface events or with malformed ranges are ignored', (
     state,
   )
   const odd = /** @type {any} */ ({ op: 'replace', startSeq: '1', endSeq: 2 })
+  // A malformed replacement is not applied as one: the event is a plain surface append, so only the
+  // turn's first-node marker moves (docs/03 §5.6); no cut and no epoch is touched.
   const next = apply(state, { type: 'tool/result', seq: 2, surfaceOp: odd })
-  assert.equal(next, state)
+  assert.equal(next.surfaceEpoch, state.surfaceEpoch)
+  assert.equal(next.tasks, state.tasks)
+  assert.equal(next.turnStartSeq, 2)
   const other = /** @type {any} */ ({ op: 'move' })
-  assert.equal(apply(state, { type: 'tool/result', seq: 3, surfaceOp: other }), state)
+  const moved = apply(state, { type: 'tool/result', seq: 3, surfaceOp: other })
+  assert.equal(moved.surfaceEpoch, state.surfaceEpoch)
+  assert.equal(moved.turnStartSeq, 3)
 })
 
 test('a replacement with no pending fold row and no tracked cuts changes only the epoch', () => {
@@ -618,8 +624,8 @@ test('parseState accepts states the reducer produced and rejects anything else',
 
 test('unknown events return the same state', () => {
   const state = initialState()
-  assert.equal(apply(state, { type: 'turn/start', seq: 0 }), state)
   assert.equal(apply(state, { type: 'tool/call', seq: 1, data: {} }), state)
+  assert.equal(apply(state, { type: 'session/notice', seq: 2, data: {} }), state)
 })
 
 test('parseView accepts the wire view and rejects malformed shapes', () => {

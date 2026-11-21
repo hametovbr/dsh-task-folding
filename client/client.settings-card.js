@@ -18,6 +18,7 @@ window.__ModuleLoader__.load({
     const SETTINGS_FIELDS = [
       { key: 'minSpanTokens', kind: 'number', min: 0, max: 1_000_000, step: 1 },
       { key: 'delegateEnabled', kind: 'boolean' },
+      { key: 'implicitTurnFold', kind: 'boolean' },
       { key: 'minSummaryChars', kind: 'number', min: 0, max: 10_000, step: 1 },
       { key: 'maxSummaryRatio', kind: 'number', min: 0.05, max: 0.9, step: 0.05 },
       { key: 'staleTaskSteps', kind: 'number', min: 5, max: 1_000, step: 1 },

@@ -13,8 +13,9 @@
 // The public factory keeps the name `createFoldRunner` and the deps contract it has always had: it
 // is what the tests and the plugin mount; only the file it lives in moved.
 
-import { dueTasks, resolveRegion } from '../domain/planner.js'
+import { dueTasks, implicitTurnSpan, resolveRegion } from '../domain/planner.js'
 import { TERMINAL, WAITING } from '../domain/projection.js'
+import { defaults } from '../domain/settings.js'
 import { snapshotOf } from '../domain/surface.js'
 import * as texts from '../domain/texts.js'
 import { createLogPort } from '../ports/logger.js'
@@ -23,6 +24,7 @@ import { createSessionRuntime, isBackingOff, reduce, skipReason, taskRuntime } f
 
 /** @typedef {import('../domain/types.js').State} State */
 /** @typedef {import('../domain/types.js').Task} Task */
+/** @typedef {import('../domain/settings.js').Settings} Settings */
 /** @typedef {import('../domain/planner.js').FoldRegion} FoldRegion */
 /** @typedef {import('../domain/planner.js').Region} Region */
 /** @typedef {import('../domain/surface.js').SurfaceSnapshot} Snapshot */
@@ -50,6 +52,7 @@ export const SLOW_PASS_MS = 100
  * @property {import('../ports/logger.js').LogPort} [log] an already wrapped port (wins over `logger`)
  * @property {DelegateGeneration} [delegate] the background summarizer; without it delegate tasks
  *   wait exactly as they did before the delegate path existed
+ * @property {() => Settings} [settings] the live settings; defaults are used when absent
  * @property {() => number} [now] clock seam
  */
 
@@ -58,6 +61,7 @@ export const SLOW_PASS_MS = 100
  */
 export function createFoldRunner(deps) {
   const now = deps.now ?? (() => Date.now())
+  const settingsOf = deps.settings ?? (() => defaults())
   /** @type {WeakMap<object, SessionRuntime>} the only per-session state this module keeps */
   const runtimes = new WeakMap()
   /** The boundary of the most recent pass; the test accessor below. */
@@ -208,6 +212,24 @@ export function createFoldRunner(deps) {
           apply(session, { type: 'commit-deferred', taskId: entry.id, epoch: snap.epoch })
         // A committed fold moves the outer tasks' cuts, so re-read the state before the next one.
         if (outcome === 'folded' || outcome === 'skipped') snap = await reread()
+      }
+      // Phase 3 — the turn's own fold (docs/03 §5.6, docs/07 Q10). A generated turn summary is
+      // committed after every task fold, so it can never move a region a task fold was resolved
+      // against; then a turn boundary may start the next turn's generation. The implicit fold has
+      // no task and no `task_end` meta: it is recorded exactly like the host's own auto compaction.
+      if (report.busy) snap = await reread()
+      const implicit = await generation.commitImplicit(agent, session, snap, engine, signal)
+      if (implicit === 'folded') {
+        report.folded += 1
+        snap = await reread()
+      } else if (implicit === 'busy') {
+        report.busy = true
+      }
+      if (turnStopping && !report.busy && generation.delegateSupported() && snap.state.turnSeq !== null) {
+        // Pricing the span costs one pass over the turn with the host meter, so the rule is only
+        // asked when a summarizer exists and the log has a turn boundary (docs/03 §5.6).
+        const span = implicitTurnSpan(snap.state, session, settingsOf(), deps.estimator)
+        if (span !== null) generation.startImplicit(agent, session, span, snap, engine, signal)
       }
       pruneTerminal(session, snap.state)
       return report

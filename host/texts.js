@@ -98,6 +98,27 @@ export function renderFoldList(rows) {
 }
 
 // ---------------------------------------------------------------------------
+// Stale-task hint (docs/03 §8, docs/04 §5)
+
+/**
+ * The hint for a task that has been open for `bucket` assistant messages or more. The wording is
+ * fixed by docs/04 §5, so the bytes do not move while the age stays inside a bucket and the
+ * projection's latch key stays valid. The title is quoted with JSON escaping: it stays one line
+ * and cannot end the quoted title early.
+ *
+ * @param {string} id
+ * @param {string} title
+ * @param {number} bucket
+ */
+export function renderStaleTaskHint(id, title, bucket) {
+  return (
+    `Task ${id} ${JSON.stringify(title)} has been open for ${bucket}+ steps. ` +
+    'If it is finished, call task_end with a summary; ' +
+    'if it has distinct parts, wrap the remaining parts in nested tasks.'
+  )
+}
+
+// ---------------------------------------------------------------------------
 // fold_recall reads (docs/03 §6.3): the span index, the exact range and grep
 
 /** `Fold #3 · T6 · Review PR #98 · 18 messages`, plus the page when the index has several. */

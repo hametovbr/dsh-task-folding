@@ -342,7 +342,7 @@ The heading is for the model only. The projection recognizes a fold structurally
 
 One hint only: the innermost open task has been open for `staleTaskSteps` (default 25) or more assistant messages.
 
-- Text: `Task T7 "<title>" has been open for 25+ steps. If it is finished, call task_end with a summary; if it has distinct parts, wrap the remaining parts in nested tasks.` Buckets at 25, 50, 100 steps; the text is byte-stable within a bucket.
+- Text: `Task T7 "<title>" has been open for 25+ steps. If it is finished, call task_end with a summary; if it has distinct parts, wrap the remaining parts in nested tasks.` Buckets at `staleTaskSteps`, twice and four times it — at the default threshold 25 that is 25, 50 and 100 steps; the text is byte-stable within a bucket, and scaling the buckets keeps the number truthful when the threshold is configured to something else.
 - Delivered by rewriting the pre-step decision: `{ ...decision, messages: [...decision.messages, hintMessage] }` with `source: { kind: 'task-folding:hint', key: '<id>:<bucket>' }`.
 - Latch: the projection records the last hint key; a hint is published only when its key differs. The latch is durable, so restarts do not re-publish.
 - No "no open task" hint (see 01, issue 11). An optional implicit per-turn task (open question, off by default) is the answer to forgotten discipline, not nagging.
@@ -369,7 +369,7 @@ Age is `assistantCount - task.openedAt`, both maintained by the projection in O(
 
 All fields `.volatile()`; readers clamp invalid values to defaults instead of throwing.
 
-Only `minSpanTokens`, `delegateEnabled`, `minSummaryChars` and `maxSummaryRatio` are read today (by `task_end`'s verdict). `staleTaskSteps` and `showTaskBar` take effect with the hints and the dock (M6), and `summarizationProvider`/`summarizationModel` with the delegate path (M5); until then they are inert, and no settings UI may expose them. A realm `compaction-basic` configured with `thresholdRatio <= retainRatio` fails to mount at all — see `docs/02` §6.
+All fields are live: `minSpanTokens`, `delegateEnabled`, `minSummaryChars` and `maxSummaryRatio` decide the verdict in `task_end`, `minSpanTokens` also gates the fold saving; `staleTaskSteps` drives the hint buckets (8); `summarizationProvider`/`summarizationModel` override the delegate route (5.4); `showTaskBar` shows the dock (9). A realm `compaction-basic` configured with `thresholdRatio <= retainRatio` fails to mount at all — see `docs/02` §6.
 
 ## 11. Failure modes
 

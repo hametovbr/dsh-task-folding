@@ -4,6 +4,7 @@
 import { createFoldEngine } from './engine-adapter.js'
 import { SpanEstimator } from './estimate.js'
 import { createFoldRunner } from './fold-runner.js'
+import { maybeHint } from './hints.js'
 import {
   PROJECTION_KEY,
   STATE_VERSION,
@@ -195,8 +196,28 @@ const plugin = {
       logger: ctx.logger,
       delegate,
     })
-    /** @param {any} payload @param {() => Promise<any>} next */
-    const onPreStep = (payload, next) => runner.preStep(payload, next)
+    /**
+     * The pre-step boundary: fold what is due, then hand the host's own decision back, possibly
+     * with one stale-task hint appended (docs/03 §8). The message needs a stable id: the host's
+     * `assertMessageEventShape` rejects a durable message without one, and the key is the identity
+     * the projection latches on.
+     *
+     * @param {any} payload
+     * @param {() => Promise<any>} next
+     */
+    const onPreStep = async (payload, next) => {
+      const decision = await runner.preStep(payload, next)
+      if (!decision || decision.kind !== 'enter' || projection.handle === undefined) return decision
+      const session = payload?.agent?.session
+      if (!session) return decision
+      const state = await (await projection.handle).stateOf(session)
+      const hint = maybeHint(state, readSettings(config))
+      if (hint === null) return decision
+      return {
+        ...decision,
+        messages: [...decision.messages, { ...hint.message, id: `task-folding-hint:${hint.key}` }],
+      }
+    }
     /** @param {any} payload */
     const onTurnStopping = (payload) => runner.turnStopping(payload)
     ctx.on('agent/pre-step', onPreStep)

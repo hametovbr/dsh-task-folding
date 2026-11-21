@@ -24,7 +24,7 @@ function fakeContext(options = {}) {
   const projections = []
   /** @type {{ level: string, message: string }[]} */
   const logs = []
-  const state = initialState()
+  let state = initialState()
 
   /** @type {{ event: string, handler: any }[]} */
   const listeners = []
@@ -78,7 +78,22 @@ function fakeContext(options = {}) {
       },
     },
   }
-  return { ctx, tools, sections, projections, logs, state, listeners }
+  // `state` is swapped by tests that need a session with work in it.
+  return {
+    ctx,
+    tools,
+    sections,
+    projections,
+    logs,
+    listeners,
+    get state() {
+      return state
+    },
+    /** @param {any} next @returns {void} */
+    setState(next) {
+      state = next
+    },
+  }
 }
 
 test('the plugin declares its name, services and prompt order', () => {
@@ -163,4 +178,73 @@ test('Config is present when schemastery resolves, and reads as defaults either 
   assert.equal(settings.staleTaskSteps, 25)
   assert.equal(settings.showTaskBar, false)
   if (plugin.Config) assert.equal(typeof plugin.Config, 'function', 'a schemastery schema is callable')
+})
+
+test('the pre-step handler appends one stale-task hint to the host decision', async () => {
+  const fake = fakeContext()
+  plugin.apply(fake.ctx, {})
+  const preStep = fake.listeners.find((listener) => listener.event === 'agent/pre-step')?.handler
+  assert.ok(preStep, 'the plugin registered a pre-step handler')
+
+  const task = {
+    id: 'T1',
+    title: 'long task',
+    parent: null,
+    depth: 0,
+    status: 'open',
+    beginCut: 3,
+    spanStart: 4,
+    endCut: null,
+    endMsgSeq: null,
+    endCallId: null,
+    verdict: null,
+    outcome: null,
+    estTokens: 0,
+    summaryChars: 0,
+    openedAt: 0,
+    reported: false,
+    failures: 0,
+    foldIndex: null,
+  }
+  fake.setState({ ...fake.state, open: ['T1'], tasks: { T1: task }, order: ['T1'], assistantCount: 30 })
+  const decision = { kind: 'enter', messages: [{ role: 'user', content: [{ type: 'text', text: 'go' }] }] }
+  const returned = await preStep({ agent: { session: { id: 's' } }, turn: 1, step: 1 }, async () => decision)
+  assert.equal(returned.kind, 'enter')
+  assert.equal(returned.messages.length, 2, 'the host message plus one hint')
+  const hint = returned.messages[1]
+  assert.equal(hint.role, 'user')
+  assert.equal(typeof hint.id, 'string', 'the host rejects a durable message without an id')
+  assert.deepEqual(hint.source, { kind: 'task-folding:hint', key: 'T1:25' })
+  assert.match(hint.content[0].text, /has been open for 25\+ steps/)
+})
+
+test('the pre-step handler publishes a hint only once per key', async () => {
+  const fake = fakeContext()
+  plugin.apply(fake.ctx, {})
+  const preStep = fake.listeners.find((listener) => listener.event === 'agent/pre-step')?.handler
+  const task = {
+    id: 'T1',
+    title: 'long task',
+    parent: null,
+    depth: 0,
+    status: 'open',
+    beginCut: 3,
+    spanStart: 4,
+    endCut: null,
+    endMsgSeq: null,
+    endCallId: null,
+    verdict: null,
+    outcome: null,
+    estTokens: 0,
+    summaryChars: 0,
+    openedAt: 0,
+    reported: false,
+    failures: 0,
+    foldIndex: null,
+  }
+  const state = { ...fake.state, open: ['T1'], tasks: { T1: task }, order: ['T1'], assistantCount: 30 }
+  fake.setState({ ...state, hintKey: 'T1:25' })
+  const decision = { kind: 'enter', messages: [] }
+  const returned = await preStep({ agent: { session: { id: 's' } }, turn: 1, step: 1 }, async () => decision)
+  assert.equal(returned.messages.length, 0, 'the latch suppresses the second publication')
 })

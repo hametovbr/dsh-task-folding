@@ -108,7 +108,7 @@ Source: `packages/core/agent/src/runtime-types.ts`, `packages/core/agent-loop/sr
 
 Agent methods:
 
-- `agent.inject(message: UserMessage)` — model-facing context for the next pre-step, does not wake the agent. Used for hints.
+- `agent.inject(message: UserMessage)` — model-facing context for the next pre-step, does not wake the agent. This plugin does not use it: the stale-task hint is appended to the `agent/pre-step` decision instead, so the hint is one logged `user/message` with its `source` and the projection can latch on it (03 §8).
 - `agent.runMaintenance(task: (signal) => Promise<T>)` — run a non-turn job while idle; throws synchronously if the agent is busy. **[live]** Scheduled from `agent/turn-stopping` as `agent.whenIdle().then(() => agent.runMaintenance(job))` (not awaited), the job starts right after the turn; a user message sent meanwhile is **held until the job settles** (it is not aborted by the message), so a job delays the next turn by its full remaining duration. Agent disposal (e.g. a one-shot headless process exiting) aborts it. `idle` can arrive up to ~3 s after `turn-stopping`. Not used by the current design (see [ADR 0006](adr/0006-background-delegate.md)).
 - `agent.whenIdle()` — **[live]** present; listeners must not await it.
 - `agent.session`, `agent.options.{provider, model}`.

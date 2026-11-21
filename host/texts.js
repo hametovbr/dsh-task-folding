@@ -298,6 +298,64 @@ export function formatTokens(tokens) {
 }
 
 // ---------------------------------------------------------------------------
+// Delegate summarizer (docs/03 §5.4, §7.2): the instruction and its validation messages
+
+/**
+ * The instruction of the delegate summarizer (docs/03 §7.2), appended as the final user message
+ * after the replayed prefix and the task span. `index` holds one already-rendered line per span
+ * message, in order; `budgetTokens` is the summary's size cap, already resolved by the caller
+ * (about 5-10 % of the span, capped at ~1,500 tokens).
+ *
+ * @param {{ index: readonly string[], budgetTokens: number }} input
+ * @returns {string}
+ */
+export function renderDelegateInstruction({ index, budgetTokens }) {
+  /** @type {string[]} */
+  const parts = [
+    'You are acting as the summarizer for one finished task of this session. The messages above are that task: condense them into a Markdown summary that lets another model continue the work with only the summary in view.',
+    '',
+    'Write about the work itself, not about opening or closing tasks:',
+    '- ## Done: what was done and what it produced.',
+    '- ## Decisions: user requests and corrections, quoted verbatim when the exact wording matters.',
+    '- ## Changed: exact file paths, identifiers, values and commands.',
+    '- ## Pitfalls: what failed and why.',
+    '',
+    'Messages wrapped in <compacted-summary> are earlier folds of subtasks: keep their conclusions and do not re-narrate them. Preserve exact paths, identifiers, values, commands and error strings; they cannot be guessed later.',
+    '',
+    `Open with a ## section heading. Size budget: aim for 5-10% of the summarized messages and at most about ${formatBudget(budgetTokens)} tokens. Use short bullets rather than prose paragraphs, skip an empty section instead of writing "None", and do not add a rationale to every bullet.`,
+    '',
+  ]
+  if (index.length > 0)
+    parts.push('The numbered index below lists the summarized messages, in order:', ...index, '')
+  parts.push(
+    'Output only the summary Markdown: no preamble, no code fence around it, no question, and never call a tool.',
+  )
+  return parts.join('\n')
+}
+
+/** Thousands separated, so a budget reads as prose: `1,500`. @param {number} tokens */
+function formatBudget(tokens) {
+  return String(Math.max(0, Math.round(tokens))).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}
+
+/** Empty summary text is never a usable fold (docs/03 §5.4). */
+export const DELEGATE_EMPTY = 'the delegate summary is empty'
+/** The text must open with a `## ` section after at most 3 short preamble lines (docs/03 §5.4). */
+export const DELEGATE_NO_SECTION = 'the delegate summary does not open with a "## " section'
+/** A summary over the allowed share of the span is rejected before it can be committed. */
+export const DELEGATE_TOO_LARGE = (/** @type {number} */ tokens, /** @type {number} */ limit) =>
+  `the delegate summary is too large: ~${formatBudget(tokens)} tokens, limit ~${formatBudget(limit)} tokens`
+/** The call finished without any text to commit. */
+export const DELEGATE_EMPTY_OUTPUT = 'the delegate call produced no summary text'
+/** A summary cut off at the token cap is incomplete, exactly as in the host's own summarizer. */
+export const DELEGATE_MAX_TOKENS = 'the delegate summary was truncated at the token cap'
+/** A terminal finish with no provider message of its own. */
+export const DELEGATE_ABORTED = 'the delegate call was aborted before producing a summary'
+export const DELEGATE_FAILED = 'the delegate call failed before producing a summary'
+/** The host LLM package resolved but did not carry the assembler. */
+export const DELEGATE_NO_ASSEMBLER = 'the host LLM package did not expose BlockAssembler'
+
+// ---------------------------------------------------------------------------
 // Errors (the host renders a thrown error as `Error: <message>` and records no meta)
 
 /** @param {string} tool @param {string} reason */

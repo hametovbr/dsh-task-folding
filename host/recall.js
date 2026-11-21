@@ -358,7 +358,7 @@ function messageAt(session, seq) {
  * @param {readonly number[]} shadowed
  * @returns {Map<string, string>}
  */
-function toolCallNames(session, shadowed) {
+export function toolCallNames(session, shadowed) {
   /** @type {Map<string, string>} */
   const names = new Map()
   for (const seq of shadowed) {
@@ -399,6 +399,22 @@ function toolNameOf(session, seq, message, names) {
     if (call && call.type === 'tool/call' && typeof call.data?.name === 'string') return call.data.name
   }
   return null
+}
+
+/**
+ * The one-line brief of one surface seq, exactly as the fold index renders it (docs/04 §1):
+ * `assistant: read src/auth/redirect.ts`, `tool read: 214 lines`.
+ *
+ * @param {RecallSession} session
+ * @param {number} seq
+ * @param {Map<string, string>} [names] tool-call id -> name, resolved once with
+ *   {@link toolCallNames} over the seqs being rendered
+ * @returns {string}
+ */
+export function briefOfSeq(session, seq, names = new Map()) {
+  const message = messageAt(session, seq)
+  const role = roleOf(session, seq, message)
+  return texts.renderBrief(role, message, role === 'tool' ? toolNameOf(session, seq, message, names) : null)
 }
 
 /**

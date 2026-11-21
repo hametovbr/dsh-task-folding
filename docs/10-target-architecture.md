@@ -407,13 +407,22 @@ only known behavioural defect (F9), and it is what makes step 4's transitions te
 
 ## 17. Acceptance
 
-The target architecture is reached when, on the same 357-test base plus the new tests:
+The target architecture is reached when every line below holds. State as of 2026-11-21:
 
-- every host import is inside `ports/` (a lint rule: no `@deepseek-ai/*` import outside `ports/` and
-  `domain/texts.js` has none at all);
-- no module outside `runtime/` keeps per-session state;
-- an epoch is part of every region resolution and every commit (a test replaces a node between start
-  and commit and the task folds at the next boundary — the F9 acceptance);
-- `foldRegion` no longer exists; `FoldRequest` carries `usage` and `source`;
-- mutation score ≥ 85 % on `domain/`, and the coverage gate covers every `host/**/*.js`;
-- the F9, F7 and F8 acceptance tests from docs/08 pass, and the E2E checks of docs/09 T5/T6 are green.
+| Criterion | State |
+|---|---|
+| Every host import is inside `ports/` (a lint rule, not a habit) | **Partly**: the compaction and logger ports own their boundaries, but `resolve.js`, `summarizer.js` and `index.js` still reach the host directly; no lint rule yet |
+| No module outside `runtime/` keeps per-session state | **Met** for fold scheduling: one `WeakMap<session, SessionRuntime>` in `fold-runner.js`, which is the scheduler; the runtime itself is pure |
+| An epoch is part of every region resolution and every commit (F9 acceptance) | **Met** — `test/f9-surface-epoch.test.js` |
+| `foldRegion` no longer exists; `FoldRequest` carries `usage` and `source` | **Met** — `CompactionPort.fold(FoldRequest)`, `SummaryResult.source` recorded (not logged) |
+| Mutation score ≥ 85 % on `domain/`; the coverage gate covers `host/**/*.js` | **Partly**: the gate covers every `host/**/*.js` (99.7 / 95.0 / 96.0); the mutation run covers `cuts.js` (90 %), `planner.js` (100 %), `projection.js` (89.1 %) but there is no `domain/` directory to score |
+| F9, F7 and F8 acceptance; docs/09 T5/T6 E2E green | **F9 done**; F7 and F8 open; T5/T6 not started |
+
+The **module tree of §3 is not the tree on disk**. The migration moved behaviour onto the right owners —
+epoch, ports, one runtime, one pre-step — but kept the files where they were, so these still do not
+exist: `domain/` (the pure modules sit at `host/*.js`), `runtime/scheduler.js` and
+`runtime/generation.js` (the scheduler is `fold-runner.js`, 779 lines), `tools/*` with `meta.js`
+(`tools.js` is one file), `prompt/` (`texts.js` + `hints.js`), `ports/host-services.js`, `ports/llm.js`
+(`summarizer.js`), and the client split (`client/client.js` carries module, dock and settings card
+together). Moving them is a rename with no behaviour change and no debt of its own; doing it in the same
+commit as F9 would have mixed a risky refactor with a safe one.

@@ -149,7 +149,9 @@ Tasks:
 
 Acceptance: a task closed with an empty summary folds at a step boundary after its summary is generated, with no step or user message waiting on generation; three consecutive failures stop retries across a restart; cache-hit ratio ≥ 80% on delegate folds.
 
-### M6 — Hints and UI
+### M6 — Hints and UI — **done 2026-11-21**
+
+Result: `host/hints.js` (one stale-task hint per task and bucket, delivered by appending to the `agent/pre-step` decision, latched durably in the projection), `renderStaleTaskHint`, and the browser module `client/client.js` with the dock in `conversation.input.dock` and a configuration card in `plugins.bundle.config` (+ `dsh.client`, `exports["./client"]`, 22 locale keys). 21 new tests (216 total). Live: with `staleTaskSteps: 5` the hint fired at age 5 and at age 10 and never repeated after restarts; in a scratch web profile the dock rendered `T1 · long running` from the wire view with `showTaskBar: true` and disappeared entirely with `showTaskBar: false`. A real defect was found on the way: `exports["./client"]` pointed at a non-existent path, so the host silently dropped the whole client module from its roster — now fixed and pinned by a test that the declared path exists. Writing settings from the card could not be confirmed in the scratch profile (the built-in Subagent settings page behaves the same way there); recorded as F7. Details: [`m6/REPORT.md`](../m6/REPORT.md).
 
 Tasks:
 

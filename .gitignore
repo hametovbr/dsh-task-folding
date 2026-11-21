@@ -9,3 +9,4 @@ test/fixtures/logs/*.raw.jsonl
 .m3-scratch/
 .m4-scratch/
 .m5-scratch/
+.m6-scratch/

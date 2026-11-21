@@ -62,7 +62,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
-    "perf": "node --test test/perf.manual.js"
+    "perf": "node --test test/perf.manual.js",
+    "mutation": "node scripts/mutate.js --min-score 0.85"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

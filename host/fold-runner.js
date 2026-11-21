@@ -240,8 +240,16 @@ export function createFoldRunner(deps) {
           forgetGeneration(session, task.id)
         },
         (error) => {
+          // A cancelled generation is not a failed attempt: the turn was interrupted, nothing was
+          // generated, and counting it would push a task to `failed` for work that never ran. The
+          // task simply waits for the next boundary.
+          if (signal?.aborted === true) {
+            log('warn', `task-folding: the delegate summary for ${task.id} was cancelled with the turn`)
+            forgetGeneration(session, task.id)
+            return
+          }
           const message = error instanceof Error ? error.message : String(error)
-          deps.logger.warn(`task-folding: no delegate summary for ${task.id}: ${message}`)
+          log('warn', `task-folding: no delegate summary for ${task.id}: ${message}`)
           markGenerationFailed(session, task.id)
           forgetGeneration(session, task.id)
         },
@@ -355,9 +363,7 @@ export function createFoldRunner(deps) {
       // expected outcome; anything else cannot be retried without looping.
       if (!rejectLoggedFor(session, task.id)) {
         const message = error instanceof Error ? error.message : String(error)
-        deps.logger.warn(
-          `task-folding: could not record the failed delegate attempt for ${task.id}: ${message}`,
-        )
+        log('warn', `task-folding: could not record the failed delegate attempt for ${task.id}: ${message}`)
       }
     }
     return true
@@ -416,6 +422,23 @@ export function createFoldRunner(deps) {
     for (const taskId of [...map.keys()]) {
       const task = state.tasks[taskId]
       if (!task || (task.status !== 'queued' && task.status !== 'delegate')) map.delete(taskId)
+    }
+  }
+
+  /**
+   * Logging is diagnostics, not logic: a logger that throws (a broken transport, a full sink) must
+   * not replace the error being reported, must not escape `agent/pre-step`, and must not turn into
+   * an unhandled rejection. Nothing in the fold path may depend on it succeeding.
+   *
+   * @param {'warn' | 'info'} level
+   * @param {string} message
+   */
+  function log(level, message) {
+    try {
+      const write = deps.logger[level]
+      if (typeof write === 'function') write(message)
+    } catch {
+      // Swallowed on purpose: see above.
     }
   }
 
@@ -621,7 +644,7 @@ export function createFoldRunner(deps) {
     if (map.has(taskId)) return
     map.set(taskId, reason)
     skipped.set(session, map)
-    deps.logger.warn(`task-folding: folding ${taskId} is skipped for this process: ${reason}`)
+    log('warn', `task-folding: folding ${taskId} is skipped for this process: ${reason}`)
   }
 
   /**
@@ -646,9 +669,7 @@ export function createFoldRunner(deps) {
     if (ids.has(taskId)) return
     ids.add(taskId)
     waiting.set(session, ids)
-    deps.logger.warn(
-      `task-folding: folding ${taskId} waits: the compaction lock is held by another compaction`,
-    )
+    log('warn', `task-folding: folding ${taskId} waits: the compaction lock is held by another compaction`)
   }
 
   /** @param {any} session @param {string} taskId */
@@ -670,7 +691,8 @@ export function createFoldRunner(deps) {
     map.set(taskId, record)
     backoff.set(session, map)
     const message = error instanceof Error ? error.message : String(error)
-    deps.logger.warn(
+    log(
+      'warn',
       `task-folding: folding ${taskId} failed (attempt ${record.failures}), retrying in ${record.until - boundary} boundaries: ${message}`,
     )
   }
@@ -686,11 +708,11 @@ export function createFoldRunner(deps) {
       await pass(payload.agent, payload.signal, turnStopping)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      deps.logger.warn(`task-folding: fold pass failed: ${message}`)
+      log('warn', `task-folding: fold pass failed: ${message}`)
     } finally {
       const elapsed = now() - started
       if (elapsed > SLOW_PASS_MS)
-        deps.logger.warn(`task-folding: fold pass took ${elapsed} ms (budget ${SLOW_PASS_MS} ms)`)
+        log('warn', `task-folding: fold pass took ${elapsed} ms (budget ${SLOW_PASS_MS} ms)`)
     }
   }
 

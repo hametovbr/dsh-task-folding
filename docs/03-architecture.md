@@ -390,6 +390,8 @@ All fields are live: `minSpanTokens`, `delegateEnabled`, `minSummaryChars` and `
 | No `llm` service | Delegate summaries are off; a `delegate` verdict leaves the task waiting; the one-shot line says so, and nothing retries. |
 | A journal carries `meta` written under another `stateVersion` | The payload is ignored (not reinterpreted); the projection keeps its own version and the log still replays. |
 | A journal event has a seq the host cannot have produced (negative, non-integer) | The event is ignored rather than used as a cut: a negative seq is the `ABSORBED` sentinel, and a task born collapsed would be silent corruption. |
+| The logger throws | Every runner log goes through a non-throwing helper: the original error keeps its message, nothing escapes `agent/pre-step`/`agent/turn-stopping`, and a failed delegate generation produces no unhandled rejection. Diagnostics never decide behaviour. |
+| The turn is aborted while a delegate generation is in flight | The generation is **cancelled**, not failed: one line, nothing committed, `failures` unchanged, the task waits for the next boundary. Counting an interruption toward the durable cap would `failed` a task for work that never ran. |
 | `compaction/summary` without `shadowedSeqs` | The fold still applies when its `surfaceOp` edges match a waiting span (only cut translation needs the shadowed set), so a host that omits it costs precision, not correctness (`test/degradation.test.js`). |
 
 ## 12. Invariants (tested)

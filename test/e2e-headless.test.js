@@ -43,6 +43,7 @@ function scriptedTurn(names) {
     calls: names.map((name) => ({ name, args: '{}' })),
     text: '',
     kind: 'completed',
+    error: null,
     completed: true,
   }
 }
@@ -109,15 +110,16 @@ test('summarizeTurn reads the session, the calls and the completion', () => {
   assert.equal(turn.kind, 'completed')
 })
 
-test('summarizeTurn reports an errored turn as incomplete', () => {
+test('summarizeTurn reports an errored turn as incomplete, with the host message', () => {
   const turn = summarizeTurn(
     [
       '{"type":"session","sessionId":"session-b"}',
-      '{"type":"final","reason":{"kind":"error"},"text":""}',
+      '{"type":"final","reason":{"kind":"error","error":{"message":"Authentication Fails"}},"text":""}',
     ].join('\n'),
   )
   assert.equal(turn.completed, false)
   assert.equal(turn.kind, 'error')
+  assert.equal(turn.error, 'Authentication Fails')
 })
 
 // ---------------------------------------------------------------------------

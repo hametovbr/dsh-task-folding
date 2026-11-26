@@ -151,11 +151,16 @@ export function summarizeTurn(text) {
   }
   const reason =
     final !== null && typeof final.reason === 'object' && final.reason !== null ? final.reason : null
+  const failure = reason !== null && isRecord(reason.error) ? reason.error.message : null
   return {
     sessionId: session !== undefined && typeof session.sessionId === 'string' ? session.sessionId : null,
     calls,
     text: final !== null && typeof final.text === 'string' ? final.text : '',
     kind: reason !== null && typeof reason.kind === 'string' ? reason.kind : null,
+    // The host's own message ("Authentication Fails, Your api key ... is invalid"), because a turn
+    // that dies on a missing key or a broken route otherwise reads as a model that ignored the
+    // script, and the only witness would be the uploaded artifact.
+    error: typeof failure === 'string' ? failure : null,
     completed: reason !== null && reason.kind === 'completed',
   }
 }
@@ -685,6 +690,9 @@ async function runScenario(context, name) {
     label: `${name}-turn1`,
   })
   let turns = 1
+  // An errored turn is not an uncooperative model: retrying it would spend another request to learn
+  // the same thing, so say what the host said and stop.
+  if (!first.completed) throw new Error(`the first turn failed: ${first.error ?? describeTurn(first)}`)
   const opened = first.calls.some((call) => call.name === 'task_begin')
   const closed = first.calls.some((call) => call.name === 'task_end')
   if (!opened || !closed || first.sessionId === null) {
@@ -693,6 +701,8 @@ async function runScenario(context, name) {
     process.stdout.write(`  first turn did not follow the script (${describeTurn(first)}); retrying once\n`)
     first = await runTurn(context, { profile, prompt: firstPrompt, sessionId: null, label: `${name}-turn1b` })
     turns += 1
+    if (!first.completed)
+      throw new Error(`the retried first turn failed: ${first.error ?? describeTurn(first)}`)
   }
   if (first.sessionId === null) throw new Error(`turn 1 produced no session id: ${describeTurn(first)}`)
 

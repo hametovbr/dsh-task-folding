@@ -3,6 +3,23 @@
   "version": "0.1.0",
   "description": "DeepSeek Harness plugin: wrap work in tasks and fold finished tasks into model-written summaries, with lossless recall.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hametovbr/dsh-task-folding.git"
+  },
+  "homepage": "https://github.com/hametovbr/dsh-task-folding#readme",
+  "bugs": {
+    "url": "https://github.com/hametovbr/dsh-task-folding/issues"
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "context",
+    "compaction",
+    "summarization"
+  ],
   "type": "module",
   "main": "./host/index.js",
   "exports": {
@@ -63,6 +80,7 @@
     "contract": "node scripts/contract-check.js",
     "pack:check": "node scripts/check-pack.js",
     "e2e": "node scripts/e2e-headless.js",
+    "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run pack:check",
     "locale:gen": "node scripts/gen-locale.js",
     "coverage": "node --test --experimental-test-coverage \"--test-coverage-include=host/**/*.js\" --test-coverage-branches=85 --test-coverage-lines=90 --test-coverage-functions=80 \"test/**/*.test.js\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",

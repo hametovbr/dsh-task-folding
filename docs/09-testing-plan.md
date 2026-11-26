@@ -100,7 +100,8 @@ is `sleep 12` in `bash`: a generated summary needs a turn long enough to finish 
 turn kills the background generation when its process exits. Both sessions are committed as golden
 journals and replayed by `test/e2e-headless.test.js`. The release form of the exit criterion is
 `npm run e2e -- --plugin dsh-task-folding@<version>` against the published package; it cannot run before
-the first publish (M7 §5), so the nightly today checks the working tree.
+the first publish (M7 §5), so the nightly today checks the working tree. The workflow needs the repository
+secret `DEEPSEEK_API_KEY` (an owner action) and stops with a named error when it is absent.
 
 ## 4. Order and dependencies
 

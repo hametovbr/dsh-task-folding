@@ -30,6 +30,16 @@ jobs:
         run: |
           npm install --global "@deepseek-ai/dsh@${DSH_VERSION}" pnpm@11
           dsh --version
+      # The shipped headless template ignores the managed credential store, so a fresh runner has no
+      # key unless this secret exists; say that instead of failing deep inside the first turn.
+      - name: Require the model key
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          if [ -z "${DEEPSEEK_API_KEY}" ]; then
+            echo "::error::DEEPSEEK_API_KEY is not configured for this repository; add it as a secret"
+            exit 1
+          fi
       # The script builds its own scratch DSH home under .tmp/, copies nothing from a user realm,
       # and reads the key from the environment when no credentials file exists.
       - name: Run the scripted session

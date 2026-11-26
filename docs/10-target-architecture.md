@@ -442,9 +442,10 @@ The target architecture is reached when every line below holds. State as of 2026
 | An epoch is part of every region resolution and every commit (F9 acceptance) | **Met** — `domain/surface.js` + `test/f9-surface-epoch.test.js` |
 | `foldRegion` no longer exists; `FoldRequest` carries `usage` and `source` | **Met** — `CompactionPort.fold(FoldRequest)`; `SummaryResult.source` is recorded, and the delegate commit logs it once (`runtime/generation.js`) |
 | Mutation score ≥ 85 % on `domain/`; the coverage gate covers `host/**/*.js` | **Met**: the gate covers every `host/**/*.js` (99.9 / 94.0 / 98.4) and `npm run mutation` targets `domain/cuts.js`, `domain/projection.js`, `domain/planner.js`; the score is recorded in `docs/06` after the rename |
-| F9, F7 and F8 acceptance; docs/09 T5/T6 E2E green | **F9, F7 and F8 done**; T6 done (`scripts/e2e-browser.js`, 10/10); T5, T7 and T8 not started |
+| F9, F7 and F8 acceptance; docs/09 T5/T6 E2E green | **F9, F7 and F8 done**; T6 done (`scripts/e2e-browser.js`, 10/10); T5 done (`scripts/e2e-headless.js`, 22/23 checks, two golden journals); T7 and T8 not started |
 
 The **module tree of §3 is the tree on disk** since step 8. What is still missing from the acceptance list
-is not structural: F7 and F8 (live settings persistence and the declared client-graph dependency) and the
-T5/T6 E2E checks. The `client.` prefix on the two component chunks is the host's chunk contract, recorded
-in §3, not a leftover of the old single file.
+is not structural and no longer about F7/F8 or the E2E checks — those are done (`scripts/e2e-headless.js`,
+`scripts/e2e-browser.js`). It is the remaining test plan: T7 (load and longevity) and T8 (the host-version
+matrix). The `client.` prefix on the two component chunks is the host's chunk contract, recorded in §3, not
+a leftover of the old single file.

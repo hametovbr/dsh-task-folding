@@ -1,0 +1,45 @@
+name: e2e
+
+# The headless end-to-end check (docs/09-testing-plan.md T5): a real model in a real DSH process
+# opens a task, folds it and recalls the originals from a scratch profile, and the fold has to keep
+# the provider cache-hit rate (docs/03 §12 invariant 9). It spends model tokens, so it runs nightly
+# and on demand instead of on every push; it blocks a release.
+
+on:
+  schedule:
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  headless:
+    name: Headless session against a scratch profile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+      - name: Set up Node 22 with the npm cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install the pinned host and pnpm
+        env:
+          DSH_VERSION: 0.2.2-rc.5
+        run: |
+          npm install --global "@deepseek-ai/dsh@${DSH_VERSION}" pnpm@11
+          dsh --version
+      # The script builds its own scratch DSH home under .tmp/, copies nothing from a user realm,
+      # and reads the key from the environment when no credentials file exists.
+      - name: Run the scripted session
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: npm run e2e
+      - name: Upload the turn logs when a check fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-headless-logs
+          path: .tmp/e2e-headless/logs
+          if-no-files-found: ignore

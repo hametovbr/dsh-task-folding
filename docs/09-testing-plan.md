@@ -79,13 +79,28 @@ the settings card, which is the only way to close F7 and to prove the client mod
 | **T2** | Property suite (P1 list) over generated event streams (append, replace, prune, compaction, task tool calls) — **done 2026-11-21** | `test/invariants.test.js` (9 tests, 8 properties × 200 + a non-vacuity guard, 1740 generated streams, seed 20261121, ~4 s) | 8 properties × ≥ 200 cases each, deterministic with a fixed seed, one failing seed reproducible from the report | 2 d |
 | **T3** | Fault injection in the runner and adapter (P4 list) — **done 2026-11-21**; the suite found two real hot-path defects, both fixed: a throwing logger replaced the original error and rejected the hook, and an aborted generation counted toward the durable cap | `test/faults.test.js` (12 tests, 0 skipped) | every seam has a throw/abort/lock case; no unhandled rejection; durable records counted | 1.5 d |
 | **T4** | Coverage gate extended to `host/**/*.js` + mutation run on the three pure modules — **done 2026-11-21** (gate is now `host/**/*.js` at ≥ 90 % lines / ≥ 85 % branches / ≥ 80 % functions: the suite reaches 99.85 / 94.86 / 98.32; `scripts/mutate.js` + `npm run mutation`, no dependency) | CI change, `scripts/mutate.js` | gate green; mutation score ≥ 85 %; report committed under `docs/` | 1.5 d |
-| **T5** | Headless E2E: `npm run e2e` runs a scripted session (task → fold → recall) against a scratch profile and asserts the journal with the existing scripts | `scripts/e2e-headless.js`, `.github/workflows/e2e.yml` (nightly) | green on the published release; a broken fold fails it | 1.5 d |
+| **T5** | Headless E2E: `npm run e2e` runs a scripted session (task → fold → recall) against a scratch profile and asserts the journal with the existing scripts — **done 2026-11-26**: two scenarios (`self`, `delegate`), one process per turn, 22 and 23 named checks over the turn stream and the journal, the cache-hit gate among them; `--plugin dsh-task-folding@<version>` checks a published release | `scripts/e2e-headless.js`, `.github/workflows/e2e.yml` (nightly), `test/e2e-headless.test.js` (16 tests), two golden journals | green on the published release; a broken fold fails it — every check is proven to fail by a mutation in the test | 1.5 d |
 | **T6** | Browser E2E: the dock renders, `showTaskBar` hides it, the settings card writes and the value survives a restart (F7) — **done 2026-11-22**: `scripts/e2e-browser.js` drives the running web app through the ego runtime and asserts the client boot graph, the card, the on/off writes against the profile patch on disk, the live dock and a reload; restart persistence was checked by hand against the same patch | `scripts/e2e-browser.js` (ego), nightly | ten assertions pass; F7 closed as environment | 1.5 d |
 | **T7** | Load and longevity: 200 folds in one session, 5 000 tasks, pass latency p95, prompt budget under every settings combination | `test/load.manual.js` (like `perf.manual.js`) | p95 pass < 10 ms, memory growth < 50 MB, budget ≤ 3 400 chars in all 32 combinations | 1.5 d |
 | **T8** | Host-version matrix: contract check against three releases (current, previous, latest) plus one golden journal per release | matrix in `.github/workflows/contract.yml` | the matrix passes, or the failure names the release and the field that moved | 1 d |
 
 Total ≈ 12 engineer-days, of which T0–T4 (~6.5 d) is the part that raises confidence most per day: they
 are deterministic, run on every commit, and target exactly the classes that have bitten us.
+
+**T5 result (2026-11-26).** The script walks the whole chain a user gets: it creates a scratch DSH home
+from the shipped `headless` template, adds the plugin with `dsh plugin add`, copies the credentials file
+(or uses `DEEPSEEK_API_KEY` and leaves the managed store off, as CI does), and drives one `dsh` process
+per turn with `--session-id`. `self` and `delegate` are separate profiles because the fold path is chosen
+by settings: the delegate profile sets `minSummaryChars: 3000`, so the model's ~750-character summary is
+below the floor and the verdict is `delegate` by configuration rather than by the model's cooperation.
+Live: 22/22 and 23/23 named checks, three turns each, ≈ 1 minute per scenario and ≈ 300k billed tokens
+for the pair. The spans were 6,690 and 6,862 tokens; the delegate fold made one request with 19,072
+cached against 255 fresh input tokens — 98.7 % against a 98.6 % median main request. The keepalive turn
+is `sleep 12` in `bash`: a generated summary needs a turn long enough to finish inside, and a shorter
+turn kills the background generation when its process exits. Both sessions are committed as golden
+journals and replayed by `test/e2e-headless.test.js`. The release form of the exit criterion is
+`npm run e2e -- --plugin dsh-task-folding@<version>` against the published package; it cannot run before
+the first publish (M7 §5), so the nightly today checks the working tree.
 
 ## 4. Order and dependencies
 

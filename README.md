@@ -15,9 +15,14 @@ stay in the session log and can be brought back on demand with `fold_recall`.
 ## Install
 
 ```sh
-dsh plugin add dsh-task-folding          # from the registry, once published
-dsh plugin add /path/to/dsh-task-folding  # or from a checkout, as a link
+dsh plugin add dsh-task-folding                # from the registry, once published
+dsh plugin add /path/to/dsh-task-folding        # or from a checkout, as a link
+dsh plugin add ./dsh-task-folding-0.1.0.tgz     # or from a packed tarball: a frozen copy
 ```
+
+A new bundle is resolved at boot, so restart DSH afterwards; `dsh --profile <p> --dump-config` shows
+the row the boot will compose. The settings card lives on the plugin's page, and the dock above the
+composer stays hidden until `showTaskBar` is on.
 
 Requires DSH `0.2.2-rc.5` or newer; the plugin declares its host peers and refuses nothing silently —
 if the compaction engine is unavailable it says so and leaves folding off while the tools keep working.

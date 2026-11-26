@@ -103,7 +103,9 @@ journals and replayed by `test/e2e-headless.test.js`. The release form of the ex
 the first publish (M7 §5), so the nightly today checks the working tree. The workflow needs the repository
 secret `DEEPSEEK_API_KEY` (an owner action) and stops with a named error when it is absent; with the
 secret in place the nightly is green on GitHub Actions since 2026-11-26 (run 45863440288: 22/22 and
-23/23, 2 m 21 s end to end, the delegate fold replaying 16 000 cached against 241 fresh tokens).
+23/23, 2 m 21 s end to end, the delegate fold replaying 16 000 cached against 241 fresh tokens). The
+first dispatch with a secret did fail — the value was a different key and DeepSeek answered 401 — and the
+run now prints the host's own message instead of retrying a turn that died on it.
 
 ## 4. Order and dependencies
 

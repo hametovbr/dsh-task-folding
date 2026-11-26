@@ -17,7 +17,7 @@
 | Evaluation | Task suite, configurations A/B/C/D; `scripts/eval-report.js` computes the protocol's metrics from journals | `scripts/eval-report.js` | M7 and on demand |
 | Mutation | Single-operator mutations of `cuts.js`, `projection.js` and `planner.js` in a throwaway copy; a surviving mutant is a missing assertion | `scripts/mutate.js` (`npm run mutation`, `--min-score 0.85`) | before a release; too slow for every commit |
 
-The **coverage gate** covers every `host/**/*.js` file at ≥ 90 % lines, ≥ 85 % branches and ≥ 80 % functions (`npm run coverage`); the two pure modules `domain/projection.js` and `domain/cuts.js` stay at 100 %. Line coverage is a floor, not a goal — `npm run mutation` answers whether the tests can fail at all: after the move to `host/domain/`, `cuts.js` scores 90 % (18/20) and `planner.js` 86.7 % (39/45); `projection.js` was last measured at 89.1 % before the implicit-turn change and has not been re-run since. `npm run mutation` prints the survivors by file, line and replacement.
+The **coverage gate** covers every `host/**/*.js` file at ≥ 90 % lines, ≥ 85 % branches and ≥ 80 % functions (`npm run coverage`); the two pure modules `domain/projection.js` and `domain/cuts.js` stay at 100 %. Line coverage is a floor, not a goal — `npm run mutation` answers whether the tests can fail at all: after the move to `host/domain/`, `cuts.js` scores 90 % (18/20) and `planner.js` 86.7 % (39/45); `projection.js` was last measured at 89.1 % before the implicit-turn change and has **not** been re-run since — it is 236 single-operator mutants at roughly 13 s each, about 50 minutes single-threaded, so it belongs to a release run rather than a commit. `npm run mutation` prints the survivors by file, line and replacement.
 
 ## 2. Fixtures
 

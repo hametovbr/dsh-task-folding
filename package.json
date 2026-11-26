@@ -80,14 +80,15 @@
     "contract": "node scripts/contract-check.js",
     "pack:check": "node scripts/check-pack.js",
     "e2e": "node scripts/e2e-headless.js",
-    "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run pack:check",
+    "prepublishOnly": "node scripts/release-check.js",
     "locale:gen": "node scripts/gen-locale.js",
     "coverage": "node --test --experimental-test-coverage \"--test-coverage-include=host/**/*.js\" --test-coverage-branches=85 --test-coverage-lines=90 --test-coverage-functions=80 \"test/**/*.test.js\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
     "perf": "node --test test/perf.manual.js",
-    "mutation": "node scripts/mutate.js --min-score 0.85"
+    "mutation": "node scripts/mutate.js --min-score 0.85",
+    "release:check": "node scripts/release-check.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

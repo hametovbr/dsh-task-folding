@@ -40,6 +40,7 @@ npm run pack:check  # manifest and tarball contract (offline)
 npm run mutation    # single-operator mutations of the pure modules, score >= 85%
 npm run perf        # wall-clock guards, kept out of `npm test`
 npm run e2e         # headless E2E: a scripted session in a scratch DSH home (needs an API key)
+npm run release:check  # every release gate at once; `npm publish` runs it from prepublishOnly
 npm run locale:gen  # regenerate client/client.locale.generated.js from locale/en.json
 ```
 

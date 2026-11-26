@@ -60,9 +60,26 @@ const PACKAGES = [
   },
 ]
 
-/** @param {string} command @param {string[]} args */
+/**
+ * Run a command in the scratch work directory with npm's cache and logs inside it: `~/.npm` can be
+ * read-only (docs/09 T0 hit EROFS there), and a contract check must not fail for that reason.
+ *
+ * @param {string} command
+ * @param {string[]} args
+ */
 function run(command, args) {
-  return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  return execFileSync(command, args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      npm_config_cache: path.join(work, 'npm-cache'),
+      npm_config_logs_dir: path.join(work, 'npm-logs'),
+      npm_config_update_notifier: 'false',
+      npm_config_fund: 'false',
+      npm_config_audit: 'false',
+    },
+  })
 }
 
 /**

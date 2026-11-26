@@ -92,6 +92,7 @@ npm run lint        # eslint + prettier --check
 npm run perf        # latency guards (kept out of `npm test`: they measure wall time)
 npm run contract    # live check against a published DSH release (weekly in CI)
 npm run e2e         # headless end-to-end session against a scratch DSH home (nightly in CI; needs an API key)
+npm run release:check  # every gate a release must pass, including contract and e2e (runs on npm publish)
 ```
 
 The design lives in [`docs/`](docs/README.md); [`HANDOFF.md`](HANDOFF.md) says where the work stands.

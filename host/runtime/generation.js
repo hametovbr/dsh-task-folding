@@ -11,11 +11,15 @@
 // This module keeps no state of its own beyond one cached "can this process summarize?" probe per
 // runner instance. The per-session state is the scheduler's SessionRuntime.
 
+import { finalizeFoldBlocks, nodeTokensOf } from '../domain/fold-node.js'
 import { resolveRegion } from '../domain/planner.js'
+import { inboundUserNodes } from './fold-context.js'
 import { MAX_TASK_ATTEMPTS, isBackingOff, skipReason } from './session-runtime.js'
 
 /** @typedef {import('../domain/types.js').State} State */
 /** @typedef {import('../domain/types.js').Task} Task */
+/** @typedef {import('../domain/estimate.js').SpanEstimator} SpanEstimator */
+/** @typedef {import('../domain/fold-node.js').FoldNodeInput} FoldNodeInput */
 /** @typedef {import('../domain/planner.js').FoldRegion} FoldRegion */
 /** @typedef {import('../domain/planner.js').Region} Region */
 /** @typedef {import('../domain/surface.js').SurfaceSnapshot} Snapshot */
@@ -60,6 +64,7 @@ import { MAX_TASK_ATTEMPTS, isBackingOff, skipReason } from './session-runtime.j
  *
  * @typedef {object} GenerationDeps
  * @property {DelegateGeneration} [delegate] the background summarizer; without it delegate tasks wait
+ * @property {SpanEstimator} estimator the plugin's estimator, for a fold node's pinned sections
  * @property {(session: any, action: Action) => { runtime: SessionRuntime, changed: boolean }} apply
  * @property {(session: any) => SessionRuntime} runtimeOf
  * @property {(session: any, taskId: string) => TaskRuntime | undefined} taskState
@@ -251,12 +256,26 @@ export function createGeneration(deps) {
       deps.skipTask(session, task.id, snap.epoch, 'region is not tool-pairing balanced')
       return 'skipped'
     }
+    // The generated text becomes the node body; the node form and the pinned sections are built
+    // here, at the commit, exactly as the self path builds them (ADR 0009).
+    /** @type {FoldNodeInput} */
+    const nodeInput = {
+      inbound: inboundUserNodes(session, snap.nodes, region.startIndex, region.endIndex),
+      spanTokens: deps.estimator.regionTokens(session, snap.nodes, region.startIndex, region.endIndex),
+      estimator: deps.estimator,
+      task: { id: task.id, title: task.title, outcome: task.outcome },
+      fold: null,
+      messages: region.endIndex - region.startIndex + 1,
+    }
     try {
       // The generated blocks are marked `delegate` in our own record of authorship: the host sees
       // prepared blocks unmarked, so `source` is the plugin's (docs/10 §8).
       /** @type {SummaryResult} */
       const prepared = {
-        blocks: summary.blocks,
+        blocks: finalizeFoldBlocks(summary.blocks, {
+          ...nodeInput,
+          nodeTokens: nodeTokensOf(summary.blocks, nodeInput),
+        }),
         route: deps.routeOf(snap.state, session, agent),
         usage: summary.usage,
         source: 'delegate',
@@ -498,11 +517,27 @@ export function createGeneration(deps) {
       dropImplicit(session, job.id, 'the span is not tool-pairing balanced')
       return 'dropped'
     }
+    // The turn has no task: its node carries the summary and the pinned sections, and its trailer
+    // names the fold number this commit becomes (the fold list numbers folds 1-based in commit
+    // order, so the row about to be written is `state.folds.length + 1`).
+    const modelBlocks = job.blocks ?? []
+    /** @type {FoldNodeInput} */
+    const nodeInput = {
+      inbound: inboundUserNodes(session, snap.nodes, region.startIndex, region.endIndex),
+      spanTokens: deps.estimator.regionTokens(session, snap.nodes, region.startIndex, region.endIndex),
+      estimator: deps.estimator,
+      task: null,
+      fold: snap.state.folds.length + 1,
+      messages: region.endIndex - region.startIndex + 1,
+    }
     try {
       await engine.fold({
         agent,
         region: { startSeq: region.start, endSeq: region.end },
-        blocks: job.blocks ?? [],
+        blocks: finalizeFoldBlocks(modelBlocks, {
+          ...nodeInput,
+          nodeTokens: nodeTokensOf(modelBlocks, nodeInput),
+        }),
         route: deps.routeOf(snap.state, session, agent),
         usage: job.usage,
         signal,

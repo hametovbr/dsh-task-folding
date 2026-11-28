@@ -891,9 +891,17 @@ test('an aborted generation whose region moved is dropped and regenerated for th
     const last = await runner.pass(agent, undefined, true)
     assert.deepEqual(last, { folded: 1, busy: false, skipped: [] })
     assert.equal(engine.calls.length, 2)
-    assert.deepEqual(at(engine.calls, 1).blocks, fresh, 'the fresh text is committed')
+    assert.ok(
+      at(at(engine.calls, 1).blocks, 0).text.includes('Written for the moved span.'),
+      'the fresh text is committed',
+    )
     assert.equal(sim.state.tasks.T1?.status, 'folded')
-    for (const call of engine.calls) assert.notDeepEqual(call.blocks, stale, 'stale text never commits')
+    for (const call of engine.calls) {
+      assert.ok(
+        !at(call.blocks, 0).text.includes('Describes the span from before the move'),
+        'stale text never commits',
+      )
+    }
   })
   assert.deepEqual(reasons, [])
   assert.equal(

@@ -10,6 +10,6 @@
 | [0006](0006-background-delegate.md) | Delegate summaries are generated in the background and committed like self-summaries | Accepted |
 | [0007](0007-surface-epoch.md) | The surface has an epoch; regions and skips are compared by it | Accepted |
 | [0008](0008-host-ports.md) | The host is reached through ports, and the compaction shim is one of them | Accepted |
-| [0009](0009-fold-keeps-user-text.md) | A fold node keeps the inbound user text of its region | Proposed |
+| [0009](0009-fold-keeps-user-text.md) | A fold node keeps the inbound user text of its region | Accepted |
 
 Template for new records: Context → Options → Decision → Consequences. Never edit an accepted record's decision; supersede it with a new record.

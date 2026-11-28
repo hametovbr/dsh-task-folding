@@ -13,6 +13,11 @@ import { fakeMeter, at, harnessOf, sessionOf } from './fixtures/tools.js'
 /** A summary long enough to be usable. */
 const SUMMARY = `## Done\n${'Summarized the work with its changed paths and the reason for each choice. '.repeat(3)}`
 
+/** How many plugin trailers a node text carries; a committed node has exactly one (ADR 0009). */
+function trailersOf(/** @type {string} */ text) {
+  return text.split('— fold of').length - 1
+}
+
 /**
  * @param {Sim} sim
  * @param {{ meter?: any, engine?: any, now?: () => number, estimator?: any, delegate?: any }} [options]
@@ -709,7 +714,10 @@ test('the next boundary commits the generated blocks for the same region', async
   assert.equal(engine.calls.length, 1)
   assert.equal(engine.calls[0].start, region.start)
   assert.equal(engine.calls[0].end, region.end)
-  assert.deepEqual(engine.calls[0].blocks, blocks)
+  const node = at(engine.calls[0].blocks, 0).text
+  assert.match(node, /^# T1 · /, 'the committed node carries the task heading')
+  assert.ok(node.includes('Summarized by the background call.'), 'the generated summary is the node body')
+  assert.equal(trailersOf(node), 1, 'one trailer, never two')
   assert.equal(sim.state.tasks.T1?.status, 'folded')
   assert.equal(ctl.starts.length, 1, 'the generated text is reused, not regenerated')
 })
@@ -800,7 +808,10 @@ test('nodes appended after the region do not drop a valid summary', async () => 
   assert.equal(engine.calls.length, 1)
   assert.equal(engine.calls[0].start, region.start)
   assert.equal(engine.calls[0].end, region.end)
-  assert.deepEqual(engine.calls[0].blocks, blocks)
+  const node = at(engine.calls[0].blocks, 0).text
+  assert.match(node, /^# T1 · /)
+  assert.ok(node.includes('This text still describes the region.'))
+  assert.equal(trailersOf(node), 1)
   assert.equal(sim.state.tasks.T1?.status, 'folded')
   assert.equal(ctl.starts.length, 1, 'appending after the region does not regenerate')
 })

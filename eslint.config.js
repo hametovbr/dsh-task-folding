@@ -45,7 +45,7 @@ export default [
     },
   },
   {
-    files: ['host/domain/projection.js', 'host/domain/cuts.js'],
+    files: ['host/domain/projection.js', 'host/domain/cuts.js', 'host/domain/fold-node.js'],
     rules: {
       'no-restricted-globals': ['error', 'Date', 'process', 'setTimeout', 'setInterval', 'fetch', 'crypto'],
       'no-restricted-properties': ['error', { object: 'Math', property: 'random' }],

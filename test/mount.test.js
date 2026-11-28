@@ -764,7 +764,11 @@ test('a valid summary is held as blocks with its usage and committed at the next
   const commit = at(run.record.commits, 0)
   assert.equal(commit.start, 2)
   assert.equal(commit.end, 6)
-  assert.deepEqual(commit.prepared.summary, [{ type: 'text', text: DEFAULT_SUMMARY }])
+  const node = at(commit.prepared.summary, 0)
+  assert.equal(node.type, 'text')
+  assert.match(node.text, /^# T1 · /, 'the committed node carries the task heading')
+  assert.ok(node.text.includes(DEFAULT_SUMMARY), 'the generated summary is the node body')
+  assert.equal(node.text.split('— fold of').length - 1, 1, 'one trailer, never two')
   assert.deepEqual(commit.prepared.usage, usage, 'the provider usage is carried to the host row')
   // The fold's recorded route follows the session's last header or, without one, the agent
   // options (runner.routeOf); the delegate route is not reused for it.

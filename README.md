@@ -17,7 +17,7 @@ stay in the session log and can be brought back on demand with `fold_recall`.
 ```sh
 dsh plugin add dsh-task-folding                # from the registry, once published
 dsh plugin add /path/to/dsh-task-folding        # or from a checkout, as a link
-dsh plugin add ./dsh-task-folding-0.1.0.tgz     # or from a packed tarball: a frozen copy
+dsh plugin add ./dsh-task-folding-0.2.0.tgz     # or from a packed tarball: a frozen copy
 ```
 
 A new bundle is resolved at boot, so restart DSH afterwards; `dsh --profile <p> --dump-config` shows
@@ -37,6 +37,13 @@ if the compaction engine is unavailable it says so and leaves folding off while 
 
 A prompt section teaches the discipline: open a task before a stretch of work, close it with a summary
 that says what changed and what remains, and nest only when the work really has parts.
+
+A committed checkpoint keeps what a summary cannot regenerate: the human's own inbound messages of the
+region are quoted verbatim, plugin-authored ones (an advisor note, a message this plugin has never
+seen) are named by kind and sequence number with a `fold_recall` pointer instead of being quoted back
+into the surface their author re-reads, and context the host re-injects every turn is dropped. The
+model's own text is sanitised of a copied trailer or heading, so a checkpoint carries exactly one
+heading and one trailer. See [ADR 0009](docs/adr/0009-fold-keeps-user-text.md).
 
 ## Settings
 

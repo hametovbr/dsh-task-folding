@@ -221,10 +221,15 @@ replay of the surface, renders the checkpoint as one unannotated `**user**:` mes
 dedupe history on the same event (`index.js:670-672`), so a quoted concern would return as a fresh
 instruction with nothing suppressing the repeat. That measurement is re-runnable offline:
 `npm run probe:advisor` (`scripts/advisor-compat-probe.mjs`, 5 checks, no model call) renders one fold
-twice, quoted and referenced, and fails on any regression. Three parts stay open: whether a reference line is
-enough where the model needed the message as a real turn, the delegate path's node shape (never
-exercised — all verdicts were `queued` or `below-floor`), and whether any future plugin needs its text
-back verbatim.
+twice, quoted and referenced, and fails on any regression; the release gate runs it when the package
+is installed and reports it as skipped when it is not.
+**Implemented in `0.2.0`:** `host/domain/fold-node.js` (`finalizeFoldBlocks`, `sanitizeFoldText`) at
+all three commit sites, with `host/runtime/fold-context.js` extracting the region's inbound nodes;
+tests in `test/fold-node.test.js`, `test/fold-context.test.js`, `test/fold-node-form.test.js`. Three
+parts stay open: whether a reference line is enough where the model needed the message as a real
+turn, the delegate path's node shape (never exercised in the observed run — all verdicts were
+`queued` or `below-floor`, so only the fixtures cover it), and whether any future plugin needs its
+text back verbatim.
 
 <a id="q17"></a>
 ## Q17 — A repeated `task_end` reports "no task is open"

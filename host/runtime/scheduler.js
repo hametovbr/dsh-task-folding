@@ -13,12 +13,13 @@
 // The public factory keeps the name `createFoldRunner` and the deps contract it has always had: it
 // is what the tests and the plugin mount; only the file it lives in moved.
 
+import { finalizeFoldBlocks, foldBlocksText, nodeTokensOf } from '../domain/fold-node.js'
 import { dueTasks, implicitTurnSpan, resolveRegion } from '../domain/planner.js'
 import { TERMINAL, WAITING } from '../domain/projection.js'
 import { defaults } from '../domain/settings.js'
 import { snapshotOf } from '../domain/surface.js'
-import * as texts from '../domain/texts.js'
 import { createLogPort } from '../ports/logger.js'
+import { inboundUserNodes } from './fold-context.js'
 import { createGeneration } from './generation.js'
 import { createSessionRuntime, isBackingOff, reduce, skipReason, taskRuntime } from './session-runtime.js'
 
@@ -333,10 +334,21 @@ export function createFoldRunner(deps) {
       return 'skipped'
     }
     const tokens = regionTokens(session, region)
-    const nodeText = texts.renderFoldNode(task, summary, {
+    const summaryBlocks = [{ type: 'text', text: summary }]
+    /** @type {import('../domain/fold-node.js').FoldNodeInput} */
+    const nodeInput = {
+      inbound: inboundUserNodes(session, snap.nodes, region.startIndex, region.endIndex),
+      spanTokens: tokens,
+      estimator: deps.estimator,
+      task: { id: task.id, title: task.title, outcome: task.outcome },
+      fold: null,
       messages: region.endIndex - region.startIndex + 1,
-      tokens,
+    }
+    const nodeBlocks = finalizeFoldBlocks(summaryBlocks, {
+      ...nodeInput,
+      nodeTokens: nodeTokensOf(summaryBlocks, nodeInput),
     })
+    const nodeText = foldBlocksText(nodeBlocks)
     if (deps.estimator.text(nodeText) >= tokens) {
       skipTask(session, task.id, snap.epoch, `the fold node (~${tokens} tokens of span) would not be smaller`)
       return 'skipped'
@@ -348,7 +360,7 @@ export function createFoldRunner(deps) {
       // silent, which test/f9-surface-epoch.test.js and test/fold-runner.test.js pin.
       /** @type {SummaryResult} */
       const prepared = {
-        blocks: [{ type: 'text', text: nodeText }],
+        blocks: nodeBlocks,
         route: routeOf(snap.state, session, agent),
         usage: undefined,
         source: 'self',
@@ -480,6 +492,7 @@ export function createFoldRunner(deps) {
   // own module, wired to the transitions and policies above.
   const generation = createGeneration({
     delegate: deps.delegate,
+    estimator: deps.estimator,
     apply,
     runtimeOf,
     taskState,

@@ -212,7 +212,11 @@ test('a turn that ended without a fold is summarized on its behalf and committed
   await preStep(runner, agent, 2)
   assert.equal(engine.calls.length, 1, 'the next boundary committed the generated text')
   const call = at(engine.calls, 0)
-  assert.deepEqual(call.blocks, blocks)
+  const node = at(call.blocks, 0).text
+  assert.ok(node.includes('The delegate wrote the turn summary.'), 'the generated summary is the node body')
+  assert.doesNotMatch(node, /^# T/, 'the implicit node has no task heading')
+  assert.equal(node.split('— fold of').length - 1, 1, 'one trailer')
+  assert.match(node, /originals: fold_recall\(\{ fold: 1 \}\)/, 'the trailer names the fold number')
   assert.deepEqual(call.usage, usage, 'the provider accounting reaches the host row')
   assert.deepEqual(call.route, { provider: 'route-provider', model: 'route-model' })
   assert.equal(call.region.startSeq, start.region.start)

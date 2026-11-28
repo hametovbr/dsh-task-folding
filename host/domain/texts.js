@@ -311,28 +311,121 @@ export const UNKNOWN_ROLE = 'message'
 export const BAD_REGEX = (pattern, reason) => `bad regex ${JSON.stringify(pattern)}: ${reason}.`
 
 /**
- * The node a whole task collapses into (docs/04 §6). The host frames it with its own checkpoint
- * preamble and `<compacted-summary>` tags; the projection recognises the fold structurally, never
- * from this text, so the wording here is for the model alone.
+ * The node a whole task collapses into (docs/04 §6, docs/03 §7.3). The host frames it with its own
+ * checkpoint preamble and `<compacted-summary>` tags; the projection recognises the fold
+ * structurally, never from this text, so the wording here is for the model alone.
+ *
+ * The pinned sections (ADR 0009) sit between the summary and the trailer, each already rendered as
+ * one block. A section is a heading plus one line per pinned node; the node text is the blocks
+ * joined by a blank line, exactly as the previous heading + summary + trailer form was.
  *
  * @param {{ id: string, title: string, outcome: string | null }} task
- * @param {string} summary the model's own summary
+ * @param {string} summary the model's own summary, already sanitised
  * @param {{ messages: number, tokens: number }} stats
+ * @param {readonly string[]} [sections]
  */
-export function renderFoldNode(task, summary, stats) {
+export function renderFoldNode(task, summary, stats, sections = []) {
   const outcome = task.outcome === null ? 'done' : task.outcome
-  return [
-    `# ${task.id} · ${task.title}`,
-    summary.trim(),
-    '',
+  /** @type {string[]} */
+  const blocks = []
+  const heading = `# ${task.id} · ${task.title}`
+  blocks.push(summary.trim() === '' ? heading : `${heading}\n${summary.trim()}`)
+  blocks.push(...sections.filter((section) => section !== ''))
+  blocks.push(
     `— fold of ${task.id} · ${stats.messages} messages · ~${formatTokens(stats.tokens)} tokens · outcome: ${outcome} · originals: fold_recall({ task: "${task.id}" })`,
-  ].join('\n')
+  )
+  return blocks.join('\n\n')
+}
+
+/**
+ * The node an implicit turn fold commits (docs/03 §5.6, ADR 0009). It has no task, so it has no
+ * `# T<n>` heading; the trailer names the fold number the fold list will give it.
+ *
+ * @param {string} summary the model's own summary, already sanitised
+ * @param {{ messages: number, tokens: number }} stats
+ * @param {number | null} fold the 1-based fold number the commit becomes
+ * @param {readonly string[]} [sections]
+ */
+export function renderTurnFoldNode(summary, stats, fold, sections = []) {
+  /** @type {string[]} */
+  const blocks = []
+  if (summary.trim() !== '') blocks.push(summary.trim())
+  blocks.push(...sections.filter((section) => section !== ''))
+  blocks.push(
+    `— fold of ${stats.messages} messages · ~${formatTokens(stats.tokens)} tokens · originals: ${foldRecallPointer(null, fold)}`,
+  )
+  return blocks.join('\n\n')
 }
 
 /** @param {number} tokens */
 export function formatTokens(tokens) {
   if (tokens < 1000) return String(Math.max(0, Math.round(tokens)))
   return `${(tokens / 1000).toFixed(1)}k`
+}
+
+// ---------------------------------------------------------------------------
+// The pinned inbound sections of a fold node (ADR 0009)
+
+/** The human's own messages, quoted: the only text a fold cannot regenerate. */
+export const FOLD_VERBATIM_HEADING = '## User messages, verbatim (folded)'
+/** Plugin-authored and unknown inbound nodes, named but never quoted: a fold is a rewrite. */
+export const FOLD_REFERENCE_HEADING = '## Folded inbound messages (references)'
+/** A nested `<compacted-summary>` is elided, never silently truncated. */
+export const FOLD_ELIDED_SUMMARY = '[…folded summary elided…]'
+/** The kind named for an inbound node whose source carries none this plugin can read. */
+export const FOLD_UNKNOWN_KIND = 'unknown'
+
+/**
+ * The `fold_recall` call that reads a folded node's originals back (docs/04 §1).
+ *
+ * @param {string | null} taskId
+ * @param {number | null} fold
+ */
+export function foldRecallPointer(taskId, fold) {
+  return taskId === null
+    ? `fold_recall({ fold: ${fold} })`
+    : `fold_recall({ task: ${JSON.stringify(taskId)} })`
+}
+
+/** A verbatim pin: every line of the principal's text as a blockquote line. @param {readonly string[]} lines */
+export function renderVerbatimPin(lines) {
+  return lines.map((line) => (line === '' ? '>' : `> ${line}`)).join('\n')
+}
+
+/**
+ * One reference line for a plugin-authored node: its kind and seq, and where the wording still is.
+ * The text itself is never quoted (ADR 0009 § Why plugin text is referenced, not quoted).
+ *
+ * @param {string} kind
+ * @param {number} seq
+ * @param {string} recall
+ */
+export function renderFoldReference(kind, seq, recall) {
+  return `> [${kind} · seq ${seq}] folded into this node; the text is in ${recall}`
+}
+
+/**
+ * The line a pin degrades to when the caps or the adaptive budget leave no room: it names the kind
+ * and the length, so nothing is silently truncated.
+ *
+ * @param {string} kind
+ * @param {number} seq
+ * @param {number} chars
+ * @param {string} recall
+ */
+export function renderFoldPinMarker(kind, seq, chars, recall) {
+  return `> [${kind} · seq ${seq}] ${chars} characters not pinned; the text is in ${recall}`
+}
+
+/**
+ * The line that closes a section the 4,000-character cap cut: the dropped nodes are counted, not
+ * forgotten.
+ *
+ * @param {number} count
+ * @param {string} recall
+ */
+export function renderFoldElision(count, recall) {
+  return `> […${count} folded messages not pinned; the text is in ${recall}]`
 }
 
 // ---------------------------------------------------------------------------

@@ -425,7 +425,7 @@ The host frames every summary with its checkpoint preamble and `<compacted-summa
 
 The heading is for the model only. The projection recognizes a fold structurally (4.2), never by its text.
 
-[ADR 0009](../adr/0009-fold-keeps-user-text.md) (proposed) inserts up to two sections between the summary and the trailer. The first quotes the human's own messages verbatim. The second names plugin-authored inbound nodes by kind and sequence number and points at `fold_recall`; it quotes nothing, because a fold is a rewrite that observer plugins replay. Kinds the host or a memory plugin re-injects produce no line at all. Both sections are capped at 2,000 characters per message and 4,000 per section, and the adaptive budget keeps the node smaller than the span it replaces.
+[ADR 0009](../adr/0009-fold-keeps-user-text.md) inserts up to two sections between the summary and the trailer. The first quotes the human's own messages verbatim. The second names plugin-authored inbound nodes by kind and sequence number and points at `fold_recall`; it quotes nothing, because a fold is a rewrite that observer plugins replay. Kinds the host or a memory plugin re-injects produce no line at all. Both sections are capped at 2,000 characters per message and 4,000 per section, and the adaptive budget keeps the node smaller than the span it replaces. A fold with no task (the implicit turn fold) has no `# T<n>` heading: its node is the summary, the same sections, and a trailer that names `fold_recall({ fold: N })`.
 
 ```
 ## User messages, verbatim (folded)

@@ -563,7 +563,12 @@ test('a busy commit keeps the generated text and retries it at the next boundary
   assert.equal(attempts, 2, 'no failed attempt on the successful boundary')
   assert.equal(ctl.starts.length, 1, 'the text is reused, not regenerated')
   assert.equal(sim.state.tasks.T1?.status, 'folded')
-  assert.deepEqual(engine.calls, [{ start: region.start, end: region.end, blocks }])
+  assert.equal(engine.calls.length, 1)
+  assert.equal(member(engine.calls, 0).start, region.start)
+  assert.equal(member(engine.calls, 0).end, region.end)
+  const committed = member(member(engine.calls, 0).blocks, 0).text
+  assert.match(committed, /^# T1 · /)
+  assert.ok(committed.includes('Keep me for the retry.'), 'the generated text survives the busy retry')
 })
 
 test('an unexpected commit failure keeps the text and retries it on the backoff', async () => {
@@ -601,8 +606,8 @@ test('an unexpected commit failure keeps the text and retries it on the backoff'
   const folded = await runner.pass(agent, undefined, true) // boundary 5: the retry commits
   assert.deepEqual(folded, { folded: 1, busy: false, skipped: [] })
   assert.equal(sim.state.tasks.T1?.status, 'folded')
-  const committed = member(engine.calls, 0)
-  assert.deepEqual(committed.blocks, blocks, 'the generated text survived the backoff')
+  const committed = member(member(engine.calls, 0).blocks, 0).text
+  assert.ok(committed.includes('Survives a host failure.'), 'the generated text survived the backoff')
 })
 
 // ---------------------------------------------------------------------------

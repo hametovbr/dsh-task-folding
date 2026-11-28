@@ -1,8 +1,8 @@
 # 0009 — A fold node keeps the inbound user text of its region
 
-**Status:** Proposed (2026-11-28). Extends [0003](0003-self-summary.md) and
+**Status:** Accepted (2026-11-28). Extends [0003](0003-self-summary.md) and
 [0006](0006-background-delegate.md): it fixes what a committed node must contain, not how the summary
-is written.
+is written. Implemented in `0.2.0` — see *Implementation* at the end of this record.
 
 ## Context
 
@@ -140,3 +140,24 @@ would break verbatim fidelity. A `<compacted-summary>` block inside either is re
 - The delegate path was not exercised in the observed run (every verdict was `queued` or
   `below-floor`), so its node shape is verified by reading `generation.js:230-273` and by the
   fixtures `m5-delegate-fold.jsonl` and `e2e-headless-delegate.jsonl`, not by a corpus.
+
+## Implementation
+
+Shipped in `0.2.0`:
+
+- `host/domain/fold-node.js` — `finalizeFoldBlocks(blocks, ctx)` and `sanitizeFoldText(text, mode)`,
+  pure and covered by the same ESLint purity block as `projection.js` and `cuts.js`.
+- `host/runtime/fold-context.js` — `inboundUserNodes(...)`, the one reading of a region that applies
+  the role gate, shared by the three commit sites.
+- `host/runtime/scheduler.js` — the self path builds its node through `finalizeFoldBlocks` and still
+  measures the enlarged node against the span, so the "a fold node must be smaller" rule keeps its
+  meaning with pins in it.
+- `host/runtime/generation.js` — the delegate and implicit-turn paths build the same node at the
+  commit. The implicit node has no `# T<n>` heading and its trailer names
+  `fold_recall({ fold: N })` with `N = state.folds.length + 1`.
+- Model-facing wording in `host/domain/texts.js` (`renderFoldNode`, `renderTurnFoldNode`, the two
+  headings, the reference and marker lines); `PROMPT_SECTION` is unchanged.
+- Tests: `test/fold-node.test.js` (sanitizer, pin rules, caps, adaptive budget),
+  `test/fold-context.test.js` (the role gate), `test/fold-node-form.test.js` (one heading and one
+  trailer on all three paths, no nested checkpoint); the existing fold, implicit-turn, faults and
+  mount tests moved from raw-block equality to the node form.

@@ -1,6 +1,6 @@
 {
   "name": "dsh-task-folding",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DeepSeek Harness plugin: wrap work in tasks and fold finished tasks into model-written summaries, with lossless recall.",
   "license": "MIT",
   "repository": {

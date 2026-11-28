@@ -80,6 +80,7 @@
     "contract": "node scripts/contract-check.js",
     "pack:check": "node scripts/check-pack.js",
     "e2e": "node scripts/e2e-headless.js",
+    "probe:advisor": "node scripts/advisor-compat-probe.mjs",
     "prepublishOnly": "node scripts/release-check.js",
     "locale:gen": "node scripts/gen-locale.js",
     "coverage": "node --test --experimental-test-coverage \"--test-coverage-include=host/**/*.js\" --test-coverage-branches=85 --test-coverage-lines=90 --test-coverage-functions=80 \"test/**/*.test.js\"",

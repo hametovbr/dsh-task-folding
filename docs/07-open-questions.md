@@ -219,7 +219,9 @@ for the re-injected kinds; fixed and adaptive caps — see
 feedback path instead of assuming it: a fold is a rewrite, `dsh-advisor` answers a rewrite with a full
 replay of the surface, renders the checkpoint as one unannotated `**user**:` message, and clears its
 dedupe history on the same event (`index.js:670-672`), so a quoted concern would return as a fresh
-instruction with nothing suppressing the repeat. Three parts stay open: whether a reference line is
+instruction with nothing suppressing the repeat. That measurement is re-runnable offline:
+`npm run probe:advisor` (`scripts/advisor-compat-probe.mjs`, 5 checks, no model call) renders one fold
+twice, quoted and referenced, and fails on any regression. Three parts stay open: whether a reference line is
 enough where the model needed the message as a real turn, the delegate path's node shape (never
 exercised — all verdicts were `queued` or `below-floor`), and whether any future plugin needs its text
 back verbatim.

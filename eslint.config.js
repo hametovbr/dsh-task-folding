@@ -25,7 +25,7 @@ export default [
   { ignores: ['node_modules/', 'coverage/', 'm0/', '.tmp/', '.m2-scratch/', '.m3-scratch/'] },
   js.configs.recommended,
   {
-    files: ['**/*.js'],
+    files: ['**/*.js', '**/*.mjs'],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'module',
@@ -38,7 +38,7 @@ export default [
     },
   },
   {
-    files: ['**/*.js'],
+    files: ['**/*.js', '**/*.mjs'],
     ignores: ['host/ports/**'],
     rules: {
       'no-restricted-imports': ['error', { patterns: [HOST_PACKAGE_IMPORT] }],

@@ -86,8 +86,13 @@ Acceptance is a unit property, not an advisor end-to-end run: the verbatim secti
 
 ### Why plugin text is referenced, not quoted
 
-Measured offline against the installed `dsh-advisor@0.7.4`, no model call: an ad-hoc probe drives
-its own `DeltaRenderer` and `EmissionGuard` over a synthetic fold event and reads the delta back.
+Measured offline against the installed `dsh-advisor@0.7.4`, no model call:
+`scripts/advisor-compat-probe.mjs` (`npm run probe:advisor`) drives the reviewer's own
+`DeltaRenderer` and `EmissionGuard` over a synthetic fold transaction — the shape
+`host/ports/compaction-shim.js` commits — and reads the delta back. It renders the same fold twice,
+once with the note quoted and once referenced, which is what makes the first bullet below a
+measurement rather than a reading of the source. Five checks, exit code 1 on any regression and 2 when
+the advisor package is absent, so it stays runnable offline without becoming a build dependency.
 
 - A fold is a rewrite. `transcript.js:72-77` treats any surface event with `surfaceOp !== 'append'` as
   a reset, so the reviewer's next delta is a **full replay** of the post-fold surface (bounded by
@@ -99,7 +104,7 @@ its own `DeltaRenderer` and `EmissionGuard` over a synthetic fold event and read
 - The same rewrite clears the advisor's anti-repeat state: `index.js:670-672` `onRewrite` calls
   `delivery.reset(sessionId)` and `runtimes.get(sessionId)?.resetGuard()`, and `emission-guard.js`
   documents the dedupe history as swept by that reset ("a note already advised before the rewrite may
-  legitimately be advised again"). Demonstrated: the same note is suppressed before a reset and
+  legitimately be advised again"). The probe shows the same note suppressed before a reset and
   accepted after one.
 
 An origin tag is prompt-level wording; it does not survive the mechanism above. Quoting a plugin's own

@@ -184,3 +184,52 @@ Three runs are weak evidence: they show the line lands, not how robust it is. A 
 that needs real work before closing, and the same prompt without the line as a control would settle
 it; no control was run here because the instruction forbade forking the repo, so the M5 observations
 quoted above are the baseline.
+
+<a id="q16"></a>
+## Q16 — A fold swallows the inbound user messages of its region
+
+**Observed (live run, 2026-11-28):** the region of a task runs from the first surface node after its
+begin batch to its end cut, so a message that arrives while the task is open falls inside it. In a
+homelab session, 8 inbound `user/message` nodes were folded by 8 folds. Seven were kinds the host
+re-injects every turn (`agent-instructions` × 6, `time-context` × 1) and lost nothing. The eighth was
+an advisor intervention of 386 characters, arriving mid-turn; it was folded into the checkpoint of the
+open task, and the checkpoint's `sourceEventSeqs` names it explicitly. The summary carries no verbatim
+marker from it — the identifiers and the wording of the requirement are gone — and `fold_recall` was
+not called once in 8 folds, so nothing was recovered.
+**Why it matters:** the user text is the one part of a region the plugin cannot regenerate. A summary
+written by the same model that was just corrected is the lossiest possible channel for the correction,
+and after the fold the node gives no signal that anything was dropped: the trailer names a task, not a
+requirement, so a model has no reason to look.
+**Options and their measured cost:**
+1. Do not fold across an inbound message — split the region or re-anchor `spanStart`. Legal for the
+   host (`compactRegion` takes one contiguous range; the busy lock is durable but released on
+   `compaction/end`, so two transactions are fine), but `foldIndex` is scalar, `folded` is terminal,
+   `coversSpan` needs exact bounds and `region.ts` rejects a summary that is not smaller — four
+   changes in this plugin, and re-anchoring only moves the loss to the next region.
+2. Pin the verbatim text into the node. One pure function at the three commit sites; +386 characters
+   in this corpus; worst case +4,000 drops the tightest fold's margin (T1, 5,428-token span, 711-token
+   node) from 7.6× to 3.6× and still commits.
+3. Keep as is. Costs nothing now and has already failed once, in a way only `fold_recall` could have
+   repaired.
+**Answer (2026-11-28): option 2**, with a role gate, a deny-list of re-injected kinds (default keep,
+including kinds the plugin has never seen), a fixed and an adaptive cap, and origin tags on every
+pinned line — see [ADR 0009](adr/0009-fold-keeps-user-text.md). Two parts stay open: whether a quoted
+pin is enough where the model needed the message as a real turn, and the delegate path's node shape,
+which the observed run never exercised (all verdicts were `queued` or `below-floor`).
+
+<a id="q17"></a>
+## Q17 — A repeated `task_end` reports "no task is open"
+
+**Observed (live):** `task_end({ "id": "T3" })` on a task that had already folded returned
+`Error: task_end failed: no task is open.` The task exists, is terminal (`folded`), and its summary is
+readable with `fold_recall`. `host/tools/task-end.js:86` tests `open.length === 0` before it resolves
+`args.id`, so naming a closed task produces an error about a different condition — and the obvious
+repair, calling `task_end` again, reproduces it.
+**Why it matters:** from the answer the model cannot tell "this id is wrong" from "this task is
+already folded"; the second has a real next step, the first does not.
+**Answer (2026-11-28): key the message off the state, not off the guard.** Resolve `args.id` first and
+read the projection's status, then render one text per terminal status — `folded` ("T3 is already
+folded (fold 3); read its summary with fold_recall({ task: \"T3\" })."), `below-floor`, `absorbed`,
+`merged` — and keep `ERR_UNKNOWN_TASK` for an id the session never saw. `TERMINAL` must be shared with
+the projection (`projection.js:29`) rather than duplicated, or the two lists drift. Texts only: no new
+state and no new event.

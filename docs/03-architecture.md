@@ -425,6 +425,13 @@ The host frames every summary with its checkpoint preamble and `<compacted-summa
 
 The heading is for the model only. The projection recognizes a fold structurally (4.2), never by its text.
 
+[ADR 0009](../adr/0009-fold-keeps-user-text.md) (proposed) inserts one section between the summary and the trailer: the verbatim text of every inbound user message of the region, tagged with its origin kind, except the kinds the host or a memory plugin re-injects. It is capped at 2,000 characters per node and 4,000 per section, and its adaptive budget keeps the node smaller than the span it replaces.
+
+```
+## User messages, verbatim (folded)
+> [advisor:concern] Re-check the X claim before it goes into the report.
+```
+
 ## 8. Hints
 
 One hint only: the innermost open task has been open for `staleTaskSteps` (default 25) or more assistant messages.

@@ -2,6 +2,7 @@
 // plugin may build text the model reads; test/prompt-budget.test.js keeps the total small.
 
 /** @typedef {import('./types.js').EndVerdict} EndVerdict */
+/** @typedef {import('./types.js').TaskStatus} TaskStatus */
 
 export const PROMPT_SECTION =
   'Task folding. Wrap each unit of work that has a verifiable outcome in task_begin … task_end. ' +
@@ -497,6 +498,35 @@ export const ERR_NO_OPEN_TASK = 'no task is open.'
 /** @param {string} id @param {readonly string[]} open */
 export const ERR_UNKNOWN_TASK = (id, open) =>
   `task ${id} is not open. Open tasks: ${open.length === 0 ? 'none' : open.join(', ')}.`
+/**
+ * The refusal for a task_end that names a task the projection already closed (docs/07 Q17). The
+ * answer names the state the log actually holds, because "no task is open" hid it and left the
+ * model with no next step. `fold` is the 1-based fold number `fold_recall` lists: the fold row
+ * index plus one.
+ *
+ * @param {string} id
+ * @param {TaskStatus} status
+ * @param {number} fold
+ */
+export const ERR_TASK_TERMINAL = (id, status, fold) => {
+  switch (status) {
+    case 'folded':
+      return `${id} is already folded (fold ${fold}); read its summary with fold_recall({ task: "${id}" }).`
+    case 'below-floor':
+      return `${id} is already closed below the fold floor; its messages stay in the conversation.`
+    case 'merged':
+    case 'absorbed':
+      return `${id} was merged into an earlier task's summary; list folds with fold_recall().`
+    case 'failed':
+      return `${id} is already closed as failed: its automatic summary failed too often, so its messages stay in the conversation.`
+    default:
+      // Unreachable: the caller answers by status only for a TERMINAL status (domain/projection.js).
+      return `${id} is already closed.`
+  }
+}
+/** The refusal for a task_end that names a task that is closed but still waiting for its fold. */
+export const ERR_TASK_WAITING = (/** @type {string} */ id) =>
+  `${id} is already closed; it is waiting for its fold.`
 export const ERR_BAD_OUTCOME = 'outcome must be done, failed or abandoned.'
 export const ERR_UNAVAILABLE = 'task folding is not ready yet; try again.'
 export const ERR_NO_EXEC = 'the call arrived without a host execution context.'

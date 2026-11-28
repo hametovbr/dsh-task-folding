@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { isBeginMeta, isEndMeta } from '../host/domain/projection.js'
+import { TERMINAL, isBeginMeta, isEndMeta } from '../host/domain/projection.js'
 import { defaults, readSettings } from '../host/domain/settings.js'
 import * as texts from '../host/domain/texts.js'
 import { TITLE_MAX, decideVerdict, normalizeTitle } from '../host/domain/verdict.js'
@@ -139,6 +139,105 @@ test('task_end without an open task or with an unknown id is an error', async ()
     h.call('task_end', { summary: SUMMARY, outcome: 'maybe' }),
     /outcome must be done, failed or abandoned/,
   )
+})
+
+test('a repeated task_end answers by the actual terminal status (docs/07 Q17)', async () => {
+  /**
+   * One row per projection TERMINAL status; `{id}` is replaced with the task the setup produced.
+   *
+   * @type {{ status: import('../host/domain/types.js').TaskStatus, message: string }[]}
+   */
+  const cases = [
+    {
+      status: 'folded',
+      message: '{id} is already folded (fold 2); read its summary with fold_recall({ task: "{id}" }).',
+    },
+    {
+      status: 'below-floor',
+      message: '{id} is already closed below the fold floor; its messages stay in the conversation.',
+    },
+    {
+      status: 'merged',
+      message: `{id} was merged into an earlier task's summary; list folds with fold_recall().`,
+    },
+    {
+      status: 'absorbed',
+      message: `{id} was merged into an earlier task's summary; list folds with fold_recall().`,
+    },
+    {
+      status: 'failed',
+      message:
+        '{id} is already closed as failed: its automatic summary failed too often, so its messages ' +
+        'stay in the conversation.',
+    },
+  ]
+  assert.deepEqual(
+    cases.map((row) => row.status).sort(),
+    [...TERMINAL].sort(),
+    'the table covers exactly the statuses the projection calls terminal',
+  )
+  for (const row of cases) {
+    const { sim, h, id } = await closedStatusHarness(row.status)
+    const error = await refusal(h, { summary: SUMMARY, id })
+    assert.equal(error, `task_end failed: ${row.message.replaceAll('{id}', id)}`, row.status)
+    assert.equal(taskOf(sim.state, id).status, row.status, 'the refused call changes nothing')
+  }
+})
+
+test('a repeated task_end on a closed task still waiting for its fold says so', async () => {
+  const { sim, h } = harness()
+  await h.batch([{ name: 'task_begin', args: { title: 'waiting' } }])
+  sim.work(5)
+  await h.batch([{ name: 'task_end', args: { summary: SUMMARY } }])
+  assert.equal(taskOf(sim.state, 'T1').status, 'queued')
+  assert.equal(
+    await refusal(h, { summary: SUMMARY, id: 'T1' }),
+    'task_end failed: T1 is already closed; it is waiting for its fold.',
+  )
+})
+
+test('an unnamed task_end with nothing open answers by the status of the only task', async () => {
+  const { sim, h } = harness()
+  await h.batch([{ name: 'task_begin', args: { title: 'only' } }])
+  sim.work(5)
+  await h.batch([{ name: 'task_end', args: { summary: SUMMARY } }])
+  sim.fold('T1')
+  assert.equal(
+    await refusal(h, { summary: SUMMARY }),
+    'task_end failed: T1 is already folded (fold 1); read its summary with fold_recall({ task: "T1" }).',
+  )
+})
+
+test('with nothing to answer by, task_end keeps the old refusals', async () => {
+  const empty = harness()
+  assert.equal(await refusal(empty.h, { summary: SUMMARY }), 'task_end failed: no task is open.')
+  // An id the session never saw is still the unknown-task error, even when nothing is open.
+  assert.equal(
+    await refusal(empty.h, { summary: SUMMARY, id: 'T9' }),
+    'task_end failed: task T9 is not open. Open tasks: none.',
+  )
+  // Two closed tasks and no id: the target is ambiguous, so the unnamed call keeps the old refusal.
+  const { sim, h } = harness()
+  for (const title of ['first', 'second']) {
+    await h.batch([{ name: 'task_begin', args: { title } }])
+    sim.work(5)
+    await h.batch([{ name: 'task_end', args: { summary: SUMMARY } }])
+  }
+  assert.deepEqual(sim.state.open, [])
+  assert.equal(await refusal(h, { summary: SUMMARY }), 'task_end failed: no task is open.')
+})
+
+test('a still-open task still closes when an earlier task is already closed', async () => {
+  const { sim, h } = harness()
+  await h.batch([{ name: 'task_begin', args: { title: 'first' } }])
+  sim.work(5)
+  await h.batch([{ name: 'task_end', args: { summary: SUMMARY } }])
+  await h.batch([{ name: 'task_begin', args: { title: 'second' } }])
+  sim.work(5)
+  const end = await h.one([{ name: 'task_end', args: { summary: SUMMARY } }])
+  assert.equal(end.value.id, 'T2')
+  assert.equal(end.text, 'Task T2 closed; it will be folded into your summary. No open tasks.')
+  assert.equal(taskOf(sim.state, 'T1').status, 'queued')
 })
 
 test('outcome is recorded: failed and abandoned reach the meta', async () => {
@@ -321,6 +420,67 @@ test('a task closed while its parent stays open keeps the parent stack intact', 
 
 // ---------------------------------------------------------------------------
 // Helpers
+
+/**
+ * The message of a task_end refusal.
+ *
+ * @param {ReturnType<typeof harnessOf>} h
+ * @param {any} args
+ * @returns {Promise<string | null>}
+ */
+async function refusal(h, args) {
+  const error = await h.call('task_end', args).then(
+    () => null,
+    (/** @type {Error} */ cause) => cause,
+  )
+  return error instanceof Error ? error.message : null
+}
+
+/**
+ * A harness whose projection holds a task in `status`, reached through the projection's own
+ * transitions; `id` names that task.
+ *
+ * @param {import('../host/domain/types.js').TaskStatus} status
+ * @returns {Promise<{ sim: Sim, h: ReturnType<typeof harnessOf>, id: string }>}
+ */
+async function closedStatusHarness(status) {
+  const sim = new Sim()
+  const h = harnessOf(sim, { meter: fakeMeter() })
+  if (status === 'folded') {
+    // Two folds, so the answer proves the 1-based fold number is the row index plus one.
+    await h.batch([{ name: 'task_begin', args: { title: 'first' } }])
+    sim.work(5)
+    await h.batch([{ name: 'task_end', args: { summary: SUMMARY } }])
+    sim.fold('T1')
+    await h.batch([{ name: 'task_begin', args: { title: 'second' } }])
+    sim.work(5)
+    await h.batch([{ name: 'task_end', args: { summary: SUMMARY } }])
+    sim.fold('T2')
+  } else if (status === 'below-floor') {
+    await h.batch([{ name: 'task_begin', args: { title: 'small' } }])
+    await h.batch([{ name: 'task_end', args: { summary: SUMMARY } }])
+  } else if (status === 'merged') {
+    await h.batch([{ name: 'task_begin', args: { title: 'outer' } }])
+    await h.batch([{ name: 'task_begin', args: { title: 'inner' } }])
+    sim.work(3)
+    await h.batch([{ name: 'task_end', args: { summary: SUMMARY, id: 'T1' } }])
+  } else if (status === 'absorbed') {
+    sim.user('do something')
+    await h.batch([{ name: 'task_begin', args: { title: 'head' } }])
+    sim.work(2)
+    absorbThrough(sim, sim.nodes.at(-1))
+    await h.batch([{ name: 'task_end', args: { summary: LONG_SUMMARY } }])
+  } else if (status === 'failed') {
+    await h.batch([{ name: 'task_begin', args: { title: 'doomed' } }])
+    sim.work(5)
+    await h.batch([{ name: 'task_end', args: { summary: 'Too short.' } }])
+    for (let i = 0; i < 3; i++) sim.failCompaction()
+  }
+  // The newest task in that state: in the folded setup the first task is folded too.
+  const id = [...sim.state.order].reverse().find((taskId) => sim.state.tasks[taskId]?.status === status)
+  assert.ok(id, `reached status ${status}`)
+  return { sim, h, id }
+}
 
 /**
  * Compact from the second surface node through `seq`, snapping the end back to the last

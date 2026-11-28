@@ -73,7 +73,12 @@ Rendered text by verdict:
 
 `Open: …` becomes `No open tasks.` when the stack is empty. When `merged` is non-empty, append ` Subtasks closed with it: T8, T9.`
 
-Errors: no open task; unknown `id` (list the open ids); called from `run_code`.
+Errors: called from `run_code`; an `id` the session never saw (lists the open ids); and, when the call
+names a task the projection already closed, that state instead of a generic refusal — `folded` names
+the fold number and points at `fold_recall`, `below-floor` / `failed` say the messages stay,
+`merged` / `absorbed` point at the fold list, and a task that is closed but still waiting for its fold
+says so. An unnamed call with nothing open answers by status only while the session holds a single
+task; otherwise it keeps `no task is open.`
 
 ### `fold_recall`
 

@@ -247,3 +247,10 @@ folded (fold 3); read its summary with fold_recall({ task: \"T3\" })."), `below-
 `merged` — and keep `ERR_UNKNOWN_TASK` for an id the session never saw. `TERMINAL` must be shared with
 the projection (`projection.js:29`) rather than duplicated, or the two lists drift. Texts only: no new
 state and no new event.
+**Implemented in `0.2.0`** (`host/tools/task-end.js`, texts `ERR_TASK_TERMINAL` / `ERR_TASK_WAITING`):
+the resolution runs before the open-stack guard, all five terminal statuses have a text (`failed`
+included — it is in `TERMINAL` too), a task closed but still waiting for its fold gets its own line,
+and the table-driven test asserts its case list is exactly `[...TERMINAL]`, so a new terminal status
+without a message fails the suite. Two behaviours follow from resolving first and are kept: an unknown
+id with nothing open now returns `ERR_UNKNOWN_TASK` instead of `no task is open.`, and an unnamed call
+with nothing open answers by status only when the session holds exactly one task.

@@ -12,7 +12,9 @@
 //
 // Usage: npm run probe:advisor            # looks the package up under $DSH_HOME (default ~/.dsh)
 //        node scripts/advisor-compat-probe.mjs /path/to/node_modules/dsh-advisor
-// Exits 0 when every check passes, 1 when one fails, 2 when the package cannot be found.
+// Exits 0 when every check passes, 1 when one fails, 2 when the package cannot be found (nothing can
+// be checked), 3 when the installed package no longer exports what this probe calls (the package
+// contract changed, so the probe itself, not the plugin, is what must be updated).
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -142,11 +144,91 @@ const root = (() => {
   }
 })()
 
-const { version } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+/** The package version, read before anything else fails so an exit-3 report can name it. */
+const version = (() => {
+  try {
+    return JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version
+  } catch {
+    return undefined
+  }
+})()
+
 const lib = (name) => pathToFileURL(join(root, 'lib', `${name}.js`)).href
-const { DeltaRenderer } = await import(lib('transcript'))
-const { EmissionGuard } = await import(lib('emission-guard'))
-const { isAdvisorMessage } = await import(lib('kinds'))
+
+/**
+ * The surface this probe calls: three modules, the exports taken from them and the methods used on
+ * the two classes. It is asserted before any behavioural check, because a renamed or retyped export
+ * would otherwise fail the checks for a reason that has nothing to do with task folding.
+ *
+ * @type {readonly { module: string, name: string }[]}
+ */
+const EXPORTS = [
+  { module: 'transcript', name: 'DeltaRenderer' },
+  { module: 'emission-guard', name: 'EmissionGuard' },
+  { module: 'kinds', name: 'isAdvisorMessage' },
+]
+
+/** @type {readonly { holder: string, name: string }[]} */
+const METHODS = [
+  { holder: 'DeltaRenderer', name: 'update' },
+  { holder: 'EmissionGuard', name: 'beginUpdate' },
+  { holder: 'EmissionGuard', name: 'accept' },
+  { holder: 'EmissionGuard', name: 'reset' },
+]
+
+/** @type {Record<string, Record<string, unknown>>} */
+const modules = {}
+/** @type {string[]} */
+const mismatches = []
+
+for (const name of ['transcript', 'emission-guard', 'kinds']) {
+  try {
+    modules[name] = await import(lib(name))
+  } catch (error) {
+    mismatches.push(
+      `lib/${name}.js cannot be imported (${error instanceof Error ? error.message : String(error)})`,
+    )
+  }
+}
+
+/** @type {Record<string, unknown>} */
+const exported = {}
+for (const { module, name } of EXPORTS) {
+  const value = modules[module]?.[name]
+  exported[name] = value
+  if (typeof value !== 'function') {
+    mismatches.push(
+      value === undefined
+        ? `${name} from lib/${module}.js is missing; expected a function`
+        : `${name} from lib/${module}.js has type ${typeof value}; expected a function`,
+    )
+  }
+}
+
+for (const { holder, name } of METHODS) {
+  if (typeof exported[holder] !== 'function') continue
+  if (typeof exported[holder].prototype?.[name] !== 'function') {
+    mismatches.push(`${holder}.prototype.${name} is missing or not a function`)
+  }
+}
+
+if (version === undefined) mismatches.push('package.json cannot be read, so the version cannot be reported')
+
+if (mismatches.length > 0) {
+  console.error(
+    `advisor-compat-probe: dsh-advisor ${version ?? '(unknown version)'} no longer matches the probe`,
+  )
+  console.error(`  package: ${root}`)
+  for (const mismatch of mismatches) console.error(`  - ${mismatch}`)
+  console.error(
+    '  the probe cannot decide whether the plugin regressed while the package surface differs; update it first.',
+  )
+  process.exit(3)
+}
+
+const { DeltaRenderer } = modules.transcript
+const { EmissionGuard } = modules['emission-guard']
+const { isAdvisorMessage } = modules.kinds
 
 /**
  * @param {string} pin

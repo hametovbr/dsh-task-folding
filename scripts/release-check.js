@@ -12,6 +12,10 @@
 // escape hatch for an offline build, and `npm publish --ignore-scripts` bypasses the hook entirely
 // for a hotfix whose gate already passed.
 //
+// One gate is optional rather than merely offline: `npm run probe:advisor` reads the installed
+// third-party dsh-advisor package and exits 2 when it is absent, which this script reports as
+// skipped — never as a pass. No other gate needs that package.
+//
 // Each npm child gets its cache and log directory under the gitignored `.tmp/`: `~/.npm` can be
 // read-only (docs/09 T0 hit EROFS there), and a release check must not fail for that reason.
 
@@ -25,8 +29,15 @@ const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const SCRATCH = path.join(ROOT, '.tmp')
 
 /**
- * One gate: the npm script, its name for the report, and what a failure means.
- * @typedef {{ script: string, title: string, why: string }} Step
+ * One gate: the npm script, its name for the report, what a failure means, and — for a gate that is
+ * optional depending on the machine — the exit codes that mean "skipped", not "failed", and why.
+ * @typedef {{
+ *   script: string,
+ *   title: string,
+ *   why: string,
+ *   skipExitCodes?: readonly number[],
+ *   skipWhy?: string,
+ * }} Step
  */
 
 /** @type {Step[]} */
@@ -37,6 +48,16 @@ const STATIC = [
   { script: 'coverage', title: 'coverage', why: 'the gate for every host/**/*.js file' },
   { script: 'perf', title: 'perf', why: 'the wall-clock guards, which `npm test` keeps out' },
   { script: 'pack:check', title: 'pack:check', why: 'what the tarball contains and what npm rewrites' },
+  {
+    // Offline like the rest of this group, but it reads the third-party dsh-advisor package, so it
+    // is the one gate that can be legitimately unavailable: exit 2 means "not installed, nothing to
+    // check" and the report says skipped rather than passed.
+    script: 'probe:advisor',
+    title: 'probe:advisor',
+    why: 'the installed dsh-advisor still exports the transcript and guard surface a fold drives (no network, but it needs that package)',
+    skipExitCodes: [2],
+    skipWhy: 'dsh-advisor is not installed under $DSH_HOME/profiles, so there is nothing to check',
+  },
 ]
 
 /** @type {Step[]} */
@@ -96,8 +117,8 @@ export function plan(options) {
  * Run one npm script with the repository as cwd, streaming its output.
  *
  * @param {Step} step
- * @returns {number} how long it took, in milliseconds
- * @throws {GateFailure} when the script exits non-zero
+ * @returns {{ ms: number, skipped: boolean }} how long it took, and whether it was a documented skip
+ * @throws {GateFailure} when the script exits non-zero for a reason the step does not accept
  */
 function runStep(step) {
   process.stdout.write(`\n▶ ${step.title} — ${step.why}\n`)
@@ -115,8 +136,10 @@ function runStep(step) {
     },
   })
   if (result.error !== undefined) throw result.error
-  if (result.status !== 0) throw new GateFailure(step, result.status ?? 1)
-  return Date.now() - started
+  const status = result.status ?? 1
+  const skipped = (step.skipExitCodes ?? []).includes(status)
+  if (status !== 0 && !skipped) throw new GateFailure(step, status)
+  return { ms: Date.now() - started, skipped }
 }
 
 /**
@@ -141,11 +164,12 @@ export function main(argv) {
   process.stdout.write(
     `release-check: ${steps.length} gate(s)${options.staticOnly ? ' (--static: no network, no model key)' : ''}\n`,
   )
-  /** @type {{ title: string, ms: number }[]} */
+  /** @type {{ title: string, ms: number, skipped: boolean, skipWhy?: string }[]} */
   const done = []
   for (const step of steps) {
     try {
-      done.push({ title: step.title, ms: runStep(step) })
+      const { ms, skipped } = runStep(step)
+      done.push({ title: step.title, ms, skipped, skipWhy: skipped ? step.skipWhy : undefined })
     } catch (error) {
       if (!(error instanceof GateFailure)) throw error
       process.stderr.write(`\n${error.message}\n`)
@@ -154,8 +178,19 @@ export function main(argv) {
     }
   }
   process.stdout.write('\n')
-  for (const entry of done) process.stdout.write(`✓ ${entry.title} (${(entry.ms / 1000).toFixed(1)} s)\n`)
-  process.stdout.write(`release-check: all ${done.length} gate(s) passed\n`)
+  for (const entry of done) {
+    if (entry.skipped) {
+      process.stdout.write(
+        `- ${entry.title} skipped (${(entry.ms / 1000).toFixed(1)} s): ${entry.skipWhy ?? 'not applicable here'}\n`,
+      )
+    } else {
+      process.stdout.write(`✓ ${entry.title} (${(entry.ms / 1000).toFixed(1)} s)\n`)
+    }
+  }
+  const skipped = done.filter((entry) => entry.skipped).length
+  process.stdout.write(
+    `release-check: ${done.length - skipped} gate(s) passed${skipped > 0 ? `, ${skipped} skipped` : ''}\n`,
+  )
   return 0
 }
 

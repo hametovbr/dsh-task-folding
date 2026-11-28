@@ -10,19 +10,29 @@ import { parseArgs, plan, USAGE } from '../scripts/release-check.js'
 
 test('the default plan runs the static gates, then the contract and the live E2E', () => {
   const steps = plan({ staticOnly: false, full: false }).map((step) => step.script)
-  assert.deepEqual(steps, ['lint', 'typecheck', 'test', 'coverage', 'perf', 'pack:check', 'contract', 'e2e'])
+  assert.deepEqual(steps, [
+    'lint',
+    'typecheck',
+    'test',
+    'coverage',
+    'perf',
+    'pack:check',
+    'probe:advisor',
+    'contract',
+    'e2e',
+  ])
 })
 
 test('--static drops exactly the two gates that need the network and a key', () => {
   const steps = plan({ staticOnly: true, full: false }).map((step) => step.script)
-  assert.deepEqual(steps, ['lint', 'typecheck', 'test', 'coverage', 'perf', 'pack:check'])
+  assert.deepEqual(steps, ['lint', 'typecheck', 'test', 'coverage', 'perf', 'pack:check', 'probe:advisor'])
   for (const name of ['contract', 'e2e', 'mutation']) assert.ok(!steps.includes(name), name)
 })
 
 test('--full appends the mutation run last, because it takes an hour', () => {
   const steps = plan({ staticOnly: false, full: true }).map((step) => step.script)
   assert.equal(steps.at(-1), 'mutation')
-  assert.equal(steps.length, 9)
+  assert.equal(steps.length, 10)
 })
 
 test('every step names the npm script and why a failure matters', () => {

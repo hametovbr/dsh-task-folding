@@ -425,11 +425,14 @@ The host frames every summary with its checkpoint preamble and `<compacted-summa
 
 The heading is for the model only. The projection recognizes a fold structurally (4.2), never by its text.
 
-[ADR 0009](../adr/0009-fold-keeps-user-text.md) (proposed) inserts one section between the summary and the trailer: the verbatim text of every inbound user message of the region, tagged with its origin kind, except the kinds the host or a memory plugin re-injects. It is capped at 2,000 characters per node and 4,000 per section, and its adaptive budget keeps the node smaller than the span it replaces.
+[ADR 0009](../adr/0009-fold-keeps-user-text.md) (proposed) inserts up to two sections between the summary and the trailer. The first quotes the human's own messages verbatim. The second names plugin-authored inbound nodes by kind and sequence number and points at `fold_recall`; it quotes nothing, because a fold is a rewrite that observer plugins replay. Kinds the host or a memory plugin re-injects produce no line at all. Both sections are capped at 2,000 characters per message and 4,000 per section, and the adaptive budget keeps the node smaller than the span it replaces.
 
 ```
 ## User messages, verbatim (folded)
-> [advisor:concern] Re-check the X claim before it goes into the report.
+> Fix the redirect loop before adding the banner.
+
+## Folded inbound messages (references)
+> [advisor:concern · seq 469] folded into this node; the text is in fold_recall({ task: "T5" })
 ```
 
 ## 8. Hints

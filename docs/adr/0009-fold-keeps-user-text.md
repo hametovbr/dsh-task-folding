@@ -17,6 +17,10 @@ inside a region. Seven were kinds the host re-injects every turn (`agent-instruc
 checkpoint. Its text is absent from the summary — no verbatim marker survives — and `fold_recall`
 was not called once in 8 folds, so the recovery path the trailer points at was never used.
 
+Measuring the advisor's own feedback path then changed what that eighth node deserves — a quoted line
+would return to its author as a fresh instruction — so plugin text is referenced rather than quoted
+(§ Why plugin text is referenced, not quoted).
+
 Two more facts shape the fix.
 
 - The node form is produced in one place (`host/runtime/scheduler.js:336`, `renderFoldNode`), but a
@@ -49,15 +53,19 @@ Option 2. `finalizeFoldBlocks(blocks, ctx)` becomes the single producer of node 
 three commit sites; `renderFoldNode` keeps rendering the self-path header and trailer, and gains the
 pinned section as an argument.
 
-The pin is decided by three rules, in this order:
+The pin is decided by these rules, applied in order:
 
 - **Role gate.** Only `user/message` nodes are candidates. Assistant text, tool calls and tool results
   are never pinned — they are what the summary is for.
-- **Kind deny-list, default keep.** `compact-checkpoint` is denied because pinning a checkpoint into
-  the next one recurses; `agent-instructions`, `runtime-context`, `time-context`, `skill-catalog` and
-  `dsh-mnemon` are denied because the host or a memory plugin re-injects them every turn, and a frozen
-  copy competes with the live one. Every other kind — including kinds this plugin has never seen — is
-  pinned. The list is extended by an explicit change, never by a heuristic.
+- **Principal gate.** Verbatim pinning applies to `source.kind: 'user'` — the human, the only author
+  whose text cannot be regenerated and who does not re-read the transcript as a machine.
+- **Everything else is referenced, not quoted.** A plugin-authored node (`advisor`, and every kind
+  this plugin has never seen) becomes one reference line — kind, seq and the `fold_recall` pointer.
+  Quoting it is a feedback loop; the measurement is below.
+- **Re-injected kinds are dropped.** `compact-checkpoint` is denied because pinning a checkpoint into
+  the next one recurses, and `agent-instructions`, `runtime-context`, `time-context`, `skill-catalog`
+  and `dsh-mnemon` are re-injected every turn by the host or a memory plugin, so a frozen copy competes
+  with the live one. These produce nothing at all.
 - **Caps.** 2,000 characters per node and 4,000 per section, plus an adaptive
   `pinBudget = floor(spanTokens / 2) − nodeTokens` estimated with the plugin's estimator. The adaptive
   budget is what protects the economy rule: a folded node that is not smaller than its span is
@@ -65,9 +73,39 @@ The pin is decided by three rules, in this order:
   When the budget falls below ~40 tokens the pin is replaced by a marker naming the kind and the
   length, never silently truncated.
 
-Each pinned line carries its origin kind (`> [advisor:concern] …`) because the checkpoint arrives as
-`source.kind: 'compact-checkpoint'`, and a plugin that filters advisor messages by kind cannot tell a
-quoted intervention from noise.
+The verbatim section quotes the principal, so it needs no origin tag: every line in it is `user`. The
+reference section carries the origin kind instead:
+
+```
+## Folded inbound messages (references)
+> [advisor:concern · seq 469] folded into this node; the text is in fold_recall({ task: "T5" })
+```
+
+Acceptance is a unit property, not an advisor end-to-end run: the verbatim section holds only
+`source.kind: 'user'` text, and the reference section never holds a quote.
+
+### Why plugin text is referenced, not quoted
+
+Measured offline against the installed `dsh-advisor@0.7.4`, no model call: an ad-hoc probe drives
+its own `DeltaRenderer` and `EmissionGuard` over a synthetic fold event and reads the delta back.
+
+- A fold is a rewrite. `transcript.js:72-77` treats any surface event with `surfaceOp !== 'append'` as
+  a reset, so the reviewer's next delta is a **full replay** of the post-fold surface (bounded by
+  `maxDeltaMessages`, default 60).
+- That replay renders the checkpoint as one `**user**:` message: `transcript.js:151-160` joins the
+  text blocks and prefixes the role only, with no source-kind annotation. A quoted
+  `[advisor:concern] …` line therefore reaches the reviewer as user-role text, indistinguishable from
+  an instruction the user just gave.
+- The same rewrite clears the advisor's anti-repeat state: `index.js:670-672` `onRewrite` calls
+  `delivery.reset(sessionId)` and `runtimes.get(sessionId)?.resetGuard()`, and `emission-guard.js`
+  documents the dedupe history as swept by that reset ("a note already advised before the rewrite may
+  legitimately be advised again"). Demonstrated: the same note is suppressed before a reset and
+  accepted after one.
+
+An origin tag is prompt-level wording; it does not survive the mechanism above. Quoting a plugin's own
+words back into the surface that plugin re-reads is a feedback loop, and this plugin's stated
+constraint is not to disturb the plugins around it. A reference line keeps provenance and the recovery
+path without re-feeding the text.
 
 The same commit sanitises text in both directions, with two modes: `summary` strips a copied
 `— fold of T<n> · …` trailer and a leading `# T<n> · …` heading from the model's summary; `pin` strips
@@ -79,15 +117,18 @@ would break verbatim fidelity. A `<compacted-summary>` block inside either is re
 - A node is no longer a pure summary of the model's own discourse: it quotes inbound user lines. Its
   size is bounded by `summary + 4,000 characters + trailer`, independent of how many generations of
   folds precede it.
-- The loss the plugin can still cause is bounded to non-verbatim kinds, and each fold states in the
-  node what it kept.
+- The loss the plugin can still cause is bounded to plugin-authored text: the node names its kind and
+  seq, and `fold_recall` still holds the wording. Nothing is silently dropped any more, but a plugin's
+  sentence is no longer reproduced inside the checkpoint.
 - For other plugins the transaction is unchanged: one `user/message` with
   `source.kind: 'compact-checkpoint'` and `surfaceOp: replace`. The plugin adds no event type and
   never writes a foreign `source.kind`. `dsh-advisor@0.7.4` re-reads the surface whenever
-  `surfaceOp !== 'append'`, so a replace node is already the shape it expects.
-- The observed corpus cost is one pinned message (+386 characters on a fold of ~17.5k summary
-  characters); the worst case (+4,000) drops the tightest fold's margin from 7.6× to 3.6×, which
-  still commits.
+  `surfaceOp !== 'append'`, so a replace node is already the shape it expects — and, with the rule
+  above, the replay never contains the advisor's own words.
+- The observed corpus cost of the verbatim section is zero: no `source.kind: 'user'` node fell inside a
+  region in that run, and the one advisor intervention becomes a ~60-character reference line. The
+  worst case (+4,000 characters of a human paste) drops the tightest fold's margin from 7.6× to 3.6×,
+  which still commits.
 - Not settled by this record: whether a quoted pin is enough where the model needed the message as a
   real turn. The test that would settle it is a session whose later turn depends on the exact wording
   of a folded requirement — not on the work it produced.

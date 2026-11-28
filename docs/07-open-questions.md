@@ -206,16 +206,23 @@ requirement, so a model has no reason to look.
    `compaction/end`, so two transactions are fine), but `foldIndex` is scalar, `folded` is terminal,
    `coversSpan` needs exact bounds and `region.ts` rejects a summary that is not smaller — four
    changes in this plugin, and re-anchoring only moves the loss to the next region.
-2. Pin the verbatim text into the node. One pure function at the three commit sites; +386 characters
-   in this corpus; worst case +4,000 drops the tightest fold's margin (T1, 5,428-token span, 711-token
-   node) from 7.6× to 3.6× and still commits.
+2. Pin inbound text into the node. One pure function at the three commit sites; the corpus cost is a
+   ~60-character reference line for the advisor node and nothing else (no `user`-kind node fell inside
+   a region there); worst case +4,000 characters of a human paste drops the tightest fold's margin
+   (T1, 5,428-token span, 711-token node) from 7.6× to 3.6× and still commits.
 3. Keep as is. Costs nothing now and has already failed once, in a way only `fold_recall` could have
    repaired.
-**Answer (2026-11-28): option 2**, with a role gate, a deny-list of re-injected kinds (default keep,
-including kinds the plugin has never seen), a fixed and an adaptive cap, and origin tags on every
-pinned line — see [ADR 0009](adr/0009-fold-keeps-user-text.md). Two parts stay open: whether a quoted
-pin is enough where the model needed the message as a real turn, and the delegate path's node shape,
-which the observed run never exercised (all verdicts were `queued` or `below-floor`).
+**Answer (2026-11-28): option 2, scoped to the principal.** Verbatim for `source.kind: 'user'`; one
+reference line (kind, seq, `fold_recall` pointer) for plugin-authored text such as `advisor`; nothing
+for the re-injected kinds; fixed and adaptive caps — see
+[ADR 0009](adr/0009-fold-keeps-user-text.md). The scope changed after measuring the advisor's own
+feedback path instead of assuming it: a fold is a rewrite, `dsh-advisor` answers a rewrite with a full
+replay of the surface, renders the checkpoint as one unannotated `**user**:` message, and clears its
+dedupe history on the same event (`index.js:670-672`), so a quoted concern would return as a fresh
+instruction with nothing suppressing the repeat. Three parts stay open: whether a reference line is
+enough where the model needed the message as a real turn, the delegate path's node shape (never
+exercised — all verdicts were `queued` or `below-floor`), and whether any future plugin needs its text
+back verbatim.
 
 <a id="q17"></a>
 ## Q17 — A repeated `task_end` reports "no task is open"
